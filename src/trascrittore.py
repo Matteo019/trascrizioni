@@ -5,11 +5,13 @@ Flusso audio:
   App (Teams) -> "CABLE Input" (VB-CABLE, dispositivo di riproduzione predefinito)
              -> "CABLE Output" letto da questo script
              -> rimandato alle cuffie scelte (così continui a sentire)
-             -> Groq Whisper (trascrizione) -> trascrizioni/trascrizione_X.txt
+             -> Groq Whisper (trascrizione) -> progetti/<slug>/trascrizioni/trascrizione_X.txt
 I riassunti li fa riassunto.py, da avviare separatamente.
 
 Uso (dalla cartella del progetto):
-  python src/trascrittore.py
+  python src/trascrittore.py                      progetto predefinito (corso-panthera)
+  python src/trascrittore.py --progetto <slug>
+Di solito lo avvia la dashboard (src/webapp.py).
 """
 
 import os
@@ -26,7 +28,7 @@ import numpy as np
 import sounddevice as sd
 from groq import Groq
 
-from comune import CONFIG_DIR, TRASCRIZIONI_DIR
+from comune import argomento_progetto, path_progetto, stop_richiesto, dispositivi_ascolto
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -58,12 +60,14 @@ HALLUCINATIONS = {
     "...", "",
 }
 
-OUT_DIR = TRASCRIZIONI_DIR
-OUT_DIR.mkdir(exist_ok=True)
+PROGETTO_DIR = path_progetto(argomento_progetto())
+OUT_DIR = PROGETTO_DIR / "trascrizioni"
 SESSION_NAME = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
-FAILED_DIR = OUT_DIR / "da_ritrascrivere"
-GLOSSARIO_PATH = CONFIG_DIR / "glossario.txt"
+FAILED_DIR = PROGETTO_DIR / "da_ritrascrivere"
+GLOSSARIO_PATH = PROGETTO_DIR / "glossario.txt"
+# lanciato dalla dashboard: nessuna domanda a terminale, il dispositivo arriva da MONITOR_DEVICE
+DA_DASHBOARD = os.environ.get("DASHBOARD") == "1"
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
@@ -107,26 +111,21 @@ def find_capture_device() -> int:
     )
 
 
-def list_monitor_devices() -> list:
-    devices = sd.query_devices()
-    return [
-        i for i, d in enumerate(devices)
-        if d["max_output_channels"] > 0
-        and host_api_name(d) == "Windows WASAPI"
-        and "cable" not in d["name"].lower()
-    ]
-
-
 def choose_monitor_device():
     """Dispositivo su cui rimandare l'audio per continuare a sentire la chiamata."""
-    candidates = list_monitor_devices()
+    candidates = [i for i, _ in dispositivi_ascolto()]
     devices = sd.query_devices()
 
     if MONITOR_DEVICE_HINT:
         for idx in candidates:
             if MONITOR_DEVICE_HINT.lower() in devices[idx]["name"].lower():
                 return idx
+        if DA_DASHBOARD:
+            print(f"[WARN] Dispositivo di ascolto '{MONITOR_DEVICE_HINT}' non trovato: la chiamata non si sentirà in cuffia.")
+            return None
         print(f"[WARN] MONITOR_DEVICE '{MONITOR_DEVICE_HINT}' non trovato, scegli dalla lista.")
+    elif DA_DASHBOARD:
+        return None
 
     print("\nSu quale dispositivo vuoi SENTIRE la chiamata?")
     print("  0) Nessuno (non sentire l'audio)")
@@ -335,6 +334,7 @@ def main():
     if not GROQ_API_KEY:
         sys.exit("Manca GROQ_API_KEY: copia .env.example in .env e inserisci la tua chiave.")
 
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     groq_client = Groq(api_key=GROQ_API_KEY)
     retry_failed(groq_client)
 
@@ -352,6 +352,8 @@ def main():
     with open(TRANSCRIPT_PATH, "a", encoding="utf-8") as transcript:
         try:
             while True:
+                if stop_richiesto():
+                    raise KeyboardInterrupt
                 try:
                     chunk, start = audio_queue.get(timeout=1)
                 except queue.Empty:

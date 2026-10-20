@@ -1,8 +1,8 @@
 """
 Riassunto didattico delle trascrizioni, indipendente da trascrittore.py.
 
-Cartelle (dentro trascrizioni/):
-  trascrizione_X.txt          scritta in tempo reale da trascrittore.py
+Cartelle (dentro progetti/<slug>/):
+  trascrizioni/trascrizione_X.txt   scritta in tempo reale da trascrittore.py
   storico/trascrizione_X.txt  parte della trascrizione già riassunta (fa da segnalibro:
                               alla ripartenza si riprende esattamente da lì, senza perdere nulla);
                               a sessione finita e riassunta, l'originale viene spostato qui
@@ -13,6 +13,7 @@ Cartelle (dentro trascrizioni/):
 Uso (dalla cartella del progetto):
   python src/riassunto.py               controlla ogni INTERVALLO minuti finché non premi CTRL+C
   python src/riassunto.py --una-volta   elabora quello che c'è ed esce
+  --progetto <slug>                     progetto su cui lavorare (predefinito: corso-panthera)
 """
 
 import os
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from comune import CONFIG_DIR, TRASCRIZIONI_DIR
+from comune import argomento_progetto, path_progetto, stop_richiesto
 
 INTERVALLO_MINUTI = float(os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", "10"))
 MIN_NUOVI_CARATTERI = 1500          # sotto questa soglia aspetta altro testo
@@ -41,7 +42,9 @@ MODELLI = [m.strip() for m in os.environ.get(
     "nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/nemotron-3-super-120b-a12b",
 ).split(",") if m.strip()]
 
-CONTESTO_FILE = CONFIG_DIR / "contesto.txt"
+PROGETTO_DIR = path_progetto(argomento_progetto())
+TRASCRIZIONI_DIR = PROGETTO_DIR / "trascrizioni"
+CONTESTO_FILE = PROGETTO_DIR / "contesto.txt"
 
 
 def contesto() -> str:
@@ -58,8 +61,8 @@ Scrivi sempre in italiano, in Markdown. Non inventi mai informazioni che non son
 CONTESTO DELLA SESSIONE:
 {contesto}"""
 
-STORICO_DIR = TRASCRIZIONI_DIR / "storico"
-RIASSUNTI_DIR = TRASCRIZIONI_DIR / "riassunti"
+STORICO_DIR = PROGETTO_DIR / "storico"
+RIASSUNTI_DIR = PROGETTO_DIR / "riassunti"
 
 PROMPT_APPUNTI = """Ti do un pezzo di trascrizione automatica della sessione.
 Scrivi APPUNTI DIDATTICI che non perdano nessun contenuto tecnico, tenendo separato ciò che il contesto definisce rumore.
@@ -364,7 +367,11 @@ def main():
     try:
         while True:
             ciclo(client, forza=False)
-            time.sleep(INTERVALLO_MINUTI * 60)
+            fine_attesa = time.time() + INTERVALLO_MINUTI * 60
+            while time.time() < fine_attesa:
+                if stop_richiesto():
+                    raise KeyboardInterrupt
+                time.sleep(1)
     except KeyboardInterrupt:
         print("\n[INFO] Elaboro l'ultimo pezzo prima di uscire...")
         ciclo(client, forza=True)
