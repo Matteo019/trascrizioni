@@ -381,7 +381,7 @@ def api_processi():
 
 
 @app.post("/api/progetti/{slug}/processi/{tipo}/avvia")
-def api_avvia(slug: str, tipo: str):
+def api_avvia(slug: str, tipo: str, nuova: bool = False):
     verifica_slug(slug)
     p = processo(slug, tipo)
     if p.attivo:
@@ -396,7 +396,8 @@ def api_avvia(slug: str, tipo: str):
             raise HTTPException(400, "Manca la chiave Groq: inseriscila in Impostazioni.")
     elif not os.environ.get("NVIDIA_API_KEY"):
         raise HTTPException(400, "Manca la chiave NVIDIA: inseriscila in Impostazioni.")
-    p.avvia({})
+    # la trascrizione continua l'ultima sessione; una nuova nasce solo dal bottone "Nuova sessione"
+    p.avvia({"NUOVA_SESSIONE": "1"} if tipo == "trascrizione" and nuova else {})
     return p.stato()
 
 

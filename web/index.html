@@ -17,7 +17,7 @@
   <div class="header-riga">
     <a class="brand" href="#/" aria-label="Trascrizioni — tutti i progetti">
       <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg></span>
-      <span class="brand-name">trascrizioni</span>
+      <span class="brand-testo"><span class="brand-name">trascrizioni</span><span class="brand-data" id="brand-data"></span></span>
     </a>
     <form class="ricerca-globale" id="form-ricerca" role="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
@@ -34,15 +34,22 @@
   </div>
   <nav class="topnav" aria-label="Navigazione principale (Ctrl+← / Ctrl+→ o Alt+1…4 per passare da una sezione all'altra)" title="Ctrl+← / Ctrl+→ oppure Alt+1…4">
     <a href="#/" data-nav="progetti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Progetti</a>
-    <a href="#/chat" data-nav="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z"/></svg>Chiedi</a>
+    <a href="#/chat" data-nav="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat</a>
     <a href="#/calendario" data-nav="calendario"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendario</a>
-    <a href="#/impostazioni" data-nav="impostazioni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Impostazioni</a>
+    <a href="#/impostazioni" data-nav="impostazioni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Impostazioni</a>
   </nav>
 </header>
 <main class="contenuto" id="vista" tabindex="-1"></main>
 
 <dialog id="dialogo"><form method="dialog" id="dialogo-form"></form></dialog>
+
 <div id="toasts" aria-live="polite"></div>
+<script>
+  // stessa intestazione della home: nome e data di oggi
+  document.getElementById("brand-data").textContent =
+    new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+</script>
+<script src="effetti.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

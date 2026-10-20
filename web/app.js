@@ -39,7 +39,8 @@ function toast(testo, tipo = "") {
   el.className = `toast ${tipo}`;
   el.textContent = testo;
   $("#toasts").appendChild(el);
-  setTimeout(() => el.remove(), tipo === "errore" ? 8000 : 3500);
+  window.effetti?.toast(el);
+  setTimeout(() => (window.effetti?.via(el) || Promise.resolve()).then(() => el.remove()), tipo === "errore" ? 8000 : 3500);
 }
 
 const pad = n => String(n).padStart(2, "0");
@@ -111,6 +112,7 @@ function dialogo({ titolo, testo = "", campi = [], conferma = "Conferma", perico
     // Annulla non è un submit: Invio in un campo conferma, non annulla
     form.querySelector("[data-annulla]").onclick = () => dlg.close("annulla");
     dlg.showModal();
+    window.effetti?.dialogo(dlg);
     const primo = form.querySelector("input, textarea");
     if (primo) { primo.focus(); primo.select?.(); }
   });
@@ -275,6 +277,7 @@ async function naviga() {
 
   const { parti, query } = percorso();
   const sezione = parti[0] || "progetti";
+  document.body.classList.toggle("home", sezione === "progetti");
   $$(".topnav a").forEach(a => a.classList.toggle("attivo",
     a.dataset.nav === (sezione === "p" ? "progetti" : sezione)));
 
@@ -292,6 +295,7 @@ async function naviga() {
       <div><a class="btn" href="#/">Torna ai progetti</a></div></div></div>`;
   }
   vista.focus({ preventScroll: true });
+  window.effetti?.dopoPagina(vista);
 }
 window.addEventListener("hashchange", naviga);
 window.addEventListener("beforeunload", e => { if (modificheAperte()) { e.preventDefault(); e.returnValue = ""; } });
@@ -361,59 +365,295 @@ document.addEventListener("keydown", e => {
 });
 
 /* ===================================================================
-   Home: tutti i progetti
+   Home: cruscotto e menu (senza la barra di navigazione in alto)
    =================================================================== */
 
+const ICONE_MENU = {
+  chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>`,
+  calendario: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>`,
+  impostazioni: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  pdf: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>`,
+  cerca: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>`,
+};
+
+/*
+ * Visualizzatore audio sotto il saluto: barre verticali come il segnale di una voce.
+ * Ogni barra sale e scende piano; il ritardo cresce verso destra, così il picco scorre a destra
+ * all'infinito. Altezze e opacità variano (tre livelli) per sembrare un audio vero.
+ */
+function ondeAudio(n = 56) {
+  // pseudo-casuale ma sempre uguale: il disegno non cambia a ogni visita
+  let seme = 7;
+  const caso = () => (seme = (seme * 9301 + 49297) % 233280) / 233280;
+  const opacita = [1, .6, .32];
+  return `<div class="audio-barre" aria-hidden="true">${Array.from({ length: n }, (_, i) => {
+    const inviluppo = .35 + .65 * Math.sin(Math.PI * (i + .5) / n);        // più alte al centro
+    const altezza = Math.round(28 + 72 * inviluppo * (.55 + .45 * caso()));
+    return `<i style="--a:${altezza}%;--o:${opacita[i % 3]};--r:${(-(n - i) * 0.09).toFixed(2)}s;--d:${(1.6 + caso() * 1.2).toFixed(2)}s"></i>`;
+  }).join("")}</div>`;
+}
+
+function saluto() {
+  const h = new Date().getHours();
+  return h < 13 ? "Buongiorno" : h < 18 ? "Buon pomeriggio" : "Buonasera";
+}
+
+/* minuti tra "HH:MM" e "HH:MM" (sessioni a cavallo della mezzanotte comprese) */
+function minutiSessione(s) {
+  if (!s.ora_inizio || !s.ora_fine) return 0;
+  const m = t => +t.slice(0, 2) * 60 + +t.slice(3, 5);
+  return (m(s.ora_fine) - m(s.ora_inizio) + 1440) % 1440;
+}
+const durata = minuti => minuti >= 60 ? `${Math.floor(minuti / 60)} h ${pad(minuti % 60)}` : `${minuti} min`;
+
 async function vistaProgetti(query) {
-  const [progetti, eventi] = await Promise.all([api("/api/progetti"), api("/api/calendario")]);
+  const [progetti, eventi, impostazioni] = await Promise.all([
+    api("/api/progetti"), api("/api/calendario"), api("/api/impostazioni").catch(() => null)]);
   const archiviati = query.get("archiviati") === "1";
   const visibili = progetti
     .filter(p => archiviati || p.stato !== "archiviato")
     .sort((a, b) => (b.ultima_attivita || "").localeCompare(a.ultima_attivita || ""));
-  const recenti = eventi.sort((a, b) => b.inizio.localeCompare(a.inizio)).slice(0, 6);
   const nArchiviati = progetti.filter(p => p.stato === "archiviato").length;
+  const sessioni = eventi.filter(s => archiviati || s.stato_progetto !== "archiviato")
+    .sort((a, b) => b.inizio.localeCompare(a.inizio));
+  const conPdf = sessioni.filter(s => s.ha_riassunto || s.ha_appunti);
+  const ultima = conPdf.find(s => s.ha_riassunto) || conPdf[0];
+  const chiaviOk = impostazioni ? Object.values(impostazioni.chiavi).every(Boolean) : true;
+  const ultimoProgetto = visibili[0];
+
+  // ultimi 7 giorni: minuti trascritti al giorno
+  const giorni = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (6 - i));
+    const lista = sessioni.filter(s => new Date(s.inizio).toDateString() === d.toDateString());
+    return { d, minuti: lista.reduce((t, s) => t + minutiSessione(s), 0), sessioni: lista.length };
+  });
+  const maxMinuti = Math.max(60, ...giorni.map(g => g.minuti));
+  const settimana = giorni.reduce((t, g) => ({ minuti: t.minuti + g.minuti, sessioni: t.sessioni + g.sessioni }), { minuti: 0, sessioni: 0 });
+  const qualita = visibili.reduce((t, p) => {
+    ["chiaro", "incerto", "rumore", "totale"].forEach(k => t[k] += p.qualita[k]);
+    return t;
+  }, { chiaro: 0, incerto: 0, rumore: 0, totale: 0 });
+  const oggi = giorni[giorni.length - 1];
+  const inCorso = progetti.some(p => p.processi.some(x => x.attivo));
+  const riepilogoOggi = [
+    oggi.sessioni ? `${oggi.sessioni} ${oggi.sessioni === 1 ? "sessione" : "sessioni"} oggi` : "Nessuna sessione oggi",
+    oggi.minuti ? `${durata(oggi.minuti)} trascritte` : "",
+    inCorso ? "una chiamata in corso" : "",
+  ].filter(Boolean).join(" · ");
 
   vista.innerHTML = `
-    ${hero("I tuoi progetti")}
-    <div class="sotto-hero">
-      <div class="pannello riempi">
-        <div class="riquadri scorre">
-          ${visibili.map(p => {
-            const attivi = p.processi.filter(x => x.attivo);
-            return `<a class="riquadro" href="#/p/${enc(p.slug)}">
-              <div class="riquadro-testa"><span class="riquadro-nome">${esc(p.nome)}</span>
-                ${attivi.length ? `<span class="vivo-punto" title="${attivi.map(x => NOMI_TIPO[x.tipo]).join(" e ")} in corso"></span>` : ""}
-                ${p.stato === "archiviato" ? '<span class="tag">Archiviato</span>' : ""}</div>
-              <div class="riquadro-numeri">
-                <div><span class="grande">${intero(p.sessioni)}</span><span class="secondario">sessioni</span></div>
-                <div><span class="grande">${p.qualita.totale ? percento(p.qualita.incerto, p.qualita.totale) : "—"}</span><span class="secondario">incerto</span></div>
-              </div>
-              ${p.qualita.totale ? barraQualita(p.qualita) : '<div class="barra vuota"></div>'}
-              <div class="secondario piccolo">${p.ultima_attivita ? dataOra(p.ultima_attivita) : "Mai usato"}</div>
-            </a>`;
-          }).join("")}
-          <button class="riquadro nuovo" id="nuovo"><span class="piu">+</span>Nuovo progetto</button>
+    <div class="cruscotto bento-pagina">
+      <header class="cr-testa">
+        <div class="cr-saluto">
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg></span>
+          <div><h1 class="cr-nome">trascrizioni</h1><span class="secondario">${new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}</span></div>
         </div>
-        ${nArchiviati ? `<div class="pannello-piede" style="justify-content:flex-end">
-          <label class="check"><input type="checkbox" id="archiviati" ${archiviati ? "checked" : ""}> Mostra archiviati (${nArchiviati})</label></div>` : ""}
-      </div>
-      <div class="griglia home-sotto">
-        <div class="c6">${barreProgetti(visibili)}</div>
-        <div class="c6"><div class="card card-riempi">
-          <div class="card-testa"><h3 class="card-titolo">Ultime sessioni</h3></div>
-          ${recenti.length ? `<div class="elenco scorre">${recenti.map(s => `
-            <a class="elenco-voce" href="#/p/${enc(s.progetto)}/s/${s.nome}">
-              <span class="elenco-data">${data(s.inizio)}</span>
-              <span class="elenco-titolo">${esc(s.titolo || "Senza titolo")}</span>
-              <span class="secondario">${esc(s.nome_progetto)}</span></a>`).join("")}</div>`
-            : `<div class="vuoto piccolo">Nessuna sessione</div>`}
-        </div></div>
-      </div>
+        <form class="cr-cerca" id="cr-cerca" role="search">
+          ${ICONE_MENU.cerca}
+          <input type="search" id="cr-cerca-testo" placeholder="Cerca in trascrizioni, appunti e riassunti" aria-label="Cerca">
+        </form>
+        <div class="cr-icone">
+          <a class="btn icona fantasma cr-imp" href="#/impostazioni" title="${chiaviOk ? "Impostazioni" : "Impostazioni: manca una chiave"}" aria-label="Impostazioni">
+            ${ICONE_MENU.impostazioni}${chiaviOk ? "" : '<span class="cr-allarme"></span>'}</a>
+          <button class="btn icona fantasma" id="cr-tema" aria-label="Cambia tema" title="Tema chiaro/scuro">
+            <svg class="icona-sole" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icona-luna" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <nav class="cr-progetti-fila" aria-label="Progetti">
+        <span class="etichetta-lato">Progetti</span>
+        ${visibili.map(p => {
+          const attivo = p.processi.some(x => x.attivo);
+          return `<a class="cr-pillola" href="#/p/${enc(p.slug)}" title="${intero(p.sessioni)} sessioni">
+            ${attivo ? '<span class="vivo-punto"></span>' : ""}${esc(p.nome)}<span class="cr-conta">${intero(p.sessioni)}</span></a>`;
+        }).join("")}
+        <button class="cr-pillola cr-nuovo" id="nuovo">+ Nuovo progetto</button>
+        ${nArchiviati ? `<label class="check piccolo"><input type="checkbox" id="archiviati" ${archiviati ? "checked" : ""}> archiviati (${nArchiviati})</label>` : ""}
+      </nav>
+
+      <section class="bento">
+        <article class="bento-tile b-ultimo">
+          ${ultima ? `
+            <div class="b-testa">
+              <span class="etichetta-lato">Ultimo riassunto</span>
+              <a class="b-titolo" href="#/p/${enc(ultima.progetto)}/s/${ultima.nome}">${esc(ultima.titolo || "Senza titolo")}</a>
+              <span class="secondario piccolo">${esc(ultima.nome_progetto)} · ${data(ultima.inizio)}${ultima.ora_inizio ? ` · ${ultima.ora_inizio}–${ultima.ora_fine}` : ""}${ultima.in_corso ? " · in corso" : ""}</span>
+            </div>
+            <div class="b-anteprima scorre"><div class="documento b-documento" id="b-anteprima"><span class="secondario">Carico il riassunto…</span></div></div>
+            <div class="b-azioni">
+              <a class="btn primario piccolo" href="#/p/${enc(ultima.progetto)}/s/${ultima.nome}">Apri</a>
+              <a class="btn piccolo" href="/api/progetti/${enc(ultima.progetto)}/sessioni/${ultima.nome}/pdf" target="_blank" rel="noopener">${ICONE_MENU.pdf} PDF</a>
+              <a class="btn verde piccolo" href="#/chat?progetto=${enc(ultima.progetto)}&sessione=${ultima.nome}">Chat su questa sessione</a>
+              ${ultima.qualita.totale ? `<span class="b-chiaro" title="Voci chiare nel riassunto"><strong>${percento(ultima.qualita.chiaro, ultima.qualita.totale)}</strong> chiaro</span>` : ""}
+            </div>`
+          : `<div class="vuoto"><strong>Ancora nessun riassunto</strong>Qui comparirà l'anteprima dell'ultimo riassunto.</div>`}
+        </article>
+
+        <article class="bento-tile b-live" id="cr-live"></article>
+
+        <section class="b-chat" aria-label="Chiedi alla chat">
+          <div class="b-saluto">
+            <h2 class="b-saluto-testo">${saluto()}</h2>
+            <p class="b-saluto-riga">${riepilogoOggi}</p>
+            <form class="b-aiuto" id="cr-chiedi">
+              <input type="text" id="cr-domanda" placeholder="Come ti posso aiutare?" aria-label="Come ti posso aiutare? Scrivi una domanda per la chat" autocomplete="off">
+              <button class="btn primario icona" aria-label="Invia alla chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+            </form>
+            ${ondeAudio()}
+          </div>
+        </section>
+
+        <section class="b-pdf" aria-label="Riassunti e PDF">
+          <div class="card-testa"><h3 class="card-titolo">Riassunti e PDF</h3><span class="secondario num">${intero(conPdf.length)}</span></div>
+          <div class="scorre">${conPdf.slice(0, 3).map(s => `
+            <div class="cr-pdf">
+              <a class="cr-pdf-testo" href="#/p/${enc(s.progetto)}/s/${s.nome}">
+                <strong>${esc(s.titolo || "Senza titolo")}</strong>
+                <span class="secondario piccolo">${esc(s.nome_progetto)} · ${data(s.inizio)}${s.ora_inizio ? ` · ${s.ora_inizio}` : ""}</span>
+              </a>
+              <a class="btn icona piccolo verde" href="/api/progetti/${enc(s.progetto)}/sessioni/${s.nome}/pdf" target="_blank" rel="noopener"
+                 title="Scarica PDF" aria-label="Scarica il PDF di ${esc(s.titolo || "questa sessione")}">${ICONE_MENU.pdf}</a>
+            </div>`).join("") || `<div class="vuoto piccolo">I riassunti compaiono qui appena pronti.</div>`}</div>
+        </section>
+
+        <article class="bento-tile b-settimana">
+          <div class="card-testa"><a href="#/calendario"><h3 class="card-titolo">Questa settimana →</h3></a></div>
+          <div class="b-kpi">
+            <div><span class="grande">${intero(settimana.sessioni)}</span><span class="secondario piccolo">sessioni</span></div>
+            <div><span class="cr-grande-testo">${durata(settimana.minuti)}</span><span class="secondario piccolo">trascritte</span></div>
+            <div><span class="grande">${qualita.totale ? percento(qualita.chiaro, qualita.totale) : "—"}</span><span class="secondario piccolo">chiaro</span></div>
+          </div>
+          <div class="b-grafico" role="img" aria-label="Minuti trascritti negli ultimi 7 giorni">
+            ${giorni.map(g => `<a class="b-colonna ${g.d.toDateString() === new Date().toDateString() ? "oggi" : ""}"
+                href="#/calendario?${new URLSearchParams({ mese: `${g.d.getFullYear()}-${g.d.getMonth() + 1}`, giorno: `${g.d.getFullYear()}-${pad(g.d.getMonth() + 1)}-${pad(g.d.getDate())}` })}"
+                data-tip="${esc(`<strong>${g.d.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}</strong><br>${g.sessioni} sessioni · ${durata(g.minuti)}`)}">
+                <span class="b-barra" style="--h:${g.minuti ? Math.max(6, 100 * g.minuti / maxMinuti) : 0}%"></span>
+                <span class="b-giorno">${g.d.toLocaleDateString("it-IT", { weekday: "short" }).slice(0, 3)}</span>
+              </a>`).join("")}
+          </div>
+        </article>
+      </section>
     </div>`;
 
-  attivaRigheCliccabili();
-  $("#nuovo").onclick = nuovoProgetto;
+  $("#cr-chiedi").onsubmit = e => {
+    e.preventDefault();
+    const d = $("#cr-domanda").value.trim();
+    location.hash = d ? `#/chat?${new URLSearchParams({ domanda: d })}` : "#/chat";
+  };
+  window.effetti?.audioVivo($(".audio-barre"));
+  $("#cr-cerca").onsubmit = e => {
+    e.preventDefault();
+    const q = $("#cr-cerca-testo").value.trim();
+    if (q) location.hash = `#/cerca?q=${enc(q)}`;
+  };
+  $("#cr-tema").onclick = () => $("#tema").click();
+  $("#nuovo").onclick = () => nuovoProgetto();
   $("#archiviati")?.addEventListener("change", e => { location.hash = e.target.checked ? "#/?archiviati=1" : "#/"; });
+
+  // ogni riquadro intero è cliccabile; link, bottoni e campi dentro mantengono la loro funzione
+  const sessioneLink = s => s ? `#/p/${enc(s.progetto)}/s/${s.nome}` : "";
+  const destinazioni = {
+    ".b-ultimo": sessioneLink(ultima),
+    ".b-live": ultimoProgetto ? `#/p/${enc(ultimoProgetto.slug)}` : "",
+    ".b-settimana": "#/calendario",
+  };
+  for (const [sel, href] of Object.entries(destinazioni)) {
+    const tile = $(sel);
+    if (!tile || !href) continue;
+    tile.dataset.href = href;
+    tile.classList.add("tile-cliccabile");
+    tile.tabIndex = 0;
+    tile.setAttribute("role", "link");
+    tile.onclick = e => { if (!e.target.closest("a, button, input, form, label, select, textarea")) location.hash = tile.dataset.href; };
+    tile.onkeydown = e => { if (e.key === "Enter" && e.target === tile) location.hash = tile.dataset.href; };
+  }
+
+  // anteprima dell'ultimo riassunto
+  if (ultima) {
+    api(`/api/progetti/${enc(ultima.progetto)}/sessioni/${enc(ultima.nome)}/documento/${ultima.ha_riassunto ? "riassunto" : "appunti"}`)
+      .then(doc => {
+        const box = $("#b-anteprima");
+        if (!box) return;
+        box.innerHTML = doc.html || `<span class="secondario">Riassunto non ancora pronto</span>`;
+        // titolo e indice sono già in testa al riquadro: si parte dal contenuto
+        box.querySelector("h1")?.remove();
+        box.querySelector("h1 + p, p:first-child em")?.closest("p")?.remove();
+        window.effetti?.entrata(box.querySelectorAll(":scope > *"), { passo: 25, max: 10 });
+      }).catch(() => {});
+  }
+
+  // "In corso ora": ultime frasi trascritte in diretta
+  let ultimaFirma = "";
+  async function aggiornaLive() {
+    const box = $("#cr-live");
+    if (!box) return;
+    const processi = (await api("/api/processi").catch(() => [])).filter(p => p.attivo);
+    const trascr = processi.find(p => p.tipo === "trascrizione");
+    let html;
+    if (!processi.length) {
+      html = `
+        <div class="cr-tasto-testa"><span class="cr-icona b-spento">●</span><strong>Niente in corso</strong></div>
+        <p class="secondario">Quando parte una chiamata, qui vedi la trascrizione in diretta.</p>
+        ${ultimoProgetto ? `<div class="b-azioni"><button class="btn primario" id="cr-avvia" title="Continua l'ultima sessione del progetto">Continua trascrizione</button>
+          <span class="secondario piccolo">su ${esc(ultimoProgetto.nome)}</span></div>` : ""}`;
+    } else {
+      const p = trascr || processi[0];
+      let frasi = [], avviso = "";
+      if (trascr) {
+        const log = await api(`/api/progetti/${enc(trascr.progetto)}/processi/trascrizione/log?da=-1`).catch(() => null);
+        const righe = log?.righe || [];
+        frasi = righe.filter(r => /^\[\d\d:\d\d:\d\d/.test(r)).slice(-6);
+        // ultimo messaggio di stato: un errore non seguito da "ripristinata" è un problema in corso
+        const stato = righe.filter(r => /^\[(ERRORE|AUDIO|WARN)\]/.test(r)).pop() || "";
+        if (/^\[(ERRORE|WARN)\]/.test(stato)) avviso = stato.replace(/^\[\w+\]\s*/, "");
+        // nessuna frase nuova da un po': pausa lunga oppure l'audio non arriva al cavo virtuale
+        const ultima = /^\[(\d\d):(\d\d):(\d\d)/.exec(frasi[frasi.length - 1] || "");
+        const daQuando = new Date(Math.max(new Date(trascr.avviato), ultima
+          ? new Date().setHours(+ultima[1], +ultima[2], +ultima[3], 0) : 0));
+        const minuti = Math.floor((Date.now() - daQuando) / 60000);
+        if (!avviso && minuti >= 3) avviso = `Nessuna frase trascritta da ${minuti} min: è una pausa o l'audio non arriva? Se non senti la chiamata in cuffia, riavvia la trascrizione.`;
+      }
+      const minutiAttivo = p.avviato ? Math.max(0, Math.round((Date.now() - new Date(p.avviato)) / 60000)) : 0;
+      html = `
+        <div class="cr-tasto-testa"><span class="tag successo vivo"><span class="punto"></span>Log</span>
+          <strong>${esc(p.nome_progetto)}</strong><span class="secondario piccolo" style="margin-left:auto">${durata(minutiAttivo)} · ${processi.map(x => NOMI_TIPO[x.tipo]).join(" + ")}</span></div>
+        <div class="b-frasi">${frasi.map(f => {
+          const [, ora, testo] = /^\[(\d\d:\d\d):\d\d[^\]]*\]\s*(.*)$/.exec(f) || [, "", f];
+          return `<div class="b-frase"><span class="b-ora">${ora}</span><span>${esc(testo)}</span></div>`;
+        }).join("") || `<span class="secondario">In attesa del primo blocco…</span>`}</div>
+        ${avviso ? `<div class="b-avviso" role="alert">${esc(avviso)}</div>` : ""}
+        <div class="b-azioni">
+          <a class="btn piccolo" href="#/p/${enc(p.progetto)}">Apri</a>
+          ${trascr ? `<button class="btn piccolo pericolo" id="cr-ferma">Ferma trascrizione</button>` : ""}
+        </div>`;
+    }
+    if (html === ultimaFirma) return;        // niente cambiato: nessun ridisegno
+    const nuove = ultimaFirma !== "";
+    ultimaFirma = html;
+    box.classList.toggle("acceso", processi.length > 0);
+    // in diretta il riquadro porta al progetto in corso
+    if (processi.length) box.dataset.href = `#/p/${enc((trascr || processi[0]).progetto)}`;
+    box.innerHTML = html;
+    if (nuove) window.effetti?.entrata(box.querySelectorAll(".b-frase:last-child"));
+    $("#cr-avvia")?.addEventListener("click", async () => {
+      try {
+        await api(`/api/progetti/${enc(ultimoProgetto.slug)}/processi/trascrizione/avvia`, { method: "POST" });
+        toast(`Trascrizione ripresa su ${ultimoProgetto.nome}`, "ok");
+        aggiornaHeader(); aggiornaLive();
+      } catch (e) { toast(e.message, "errore"); }
+    });
+    $("#cr-ferma")?.addEventListener("click", async () => {
+      if (!await dialogo({ titolo: "Fermare la trascrizione?", testo: "Viene trascritto anche il blocco in corso, poi si ferma.", conferma: "Ferma" })) return;
+      try {
+        await api(`/api/progetti/${enc(trascr.progetto)}/processi/trascrizione/ferma`, { method: "POST" });
+        toast("La trascrizione si ferma a fine blocco");
+        aggiornaLive();
+      } catch (e) { toast(e.message, "errore"); }
+    });
+  }
+  await aggiornaLive();
+  ogni(4000, aggiornaLive);
 }
 
 async function nuovoProgetto(valori = {}) {
@@ -482,18 +722,25 @@ async function vistaProgetto(slug, nomeSessione, tab) {
         <div class="blocco-sx">
           <div class="etichetta-lato">Sessioni</div>
           ${sessioni.length ? `<div class="sessioni-lista">${sessioni.map(x => `
+            <div class="sessione-riga">
             <a class="sessione-voce ${x.nome === nome ? "attiva" : ""}" href="${link(tab, x.nome)}">
               <span class="t">${esc(x.titolo || "Senza titolo")}</span>
               <span class="d">${data(x.inizio)}${x.ora_inizio ? ` · ${x.ora_inizio}` : ""}
                 ${x.in_corso ? '<span class="tag attesa vivo"><span class="punto"></span>in corso</span>' : ""}
                 ${x.qualita.totale ? `<span class="num" style="margin-left:auto" title="Incerto">${percento(x.qualita.incerto, x.qualita.totale)}</span>` : ""}</span>
-            </a>`).join("")}</div>`
+            </a>
+            ${x.ha_riassunto || x.ha_appunti
+              ? `<a class="btn icona piccolo verde" href="/api/progetti/${enc(slug)}/sessioni/${x.nome}/pdf" target="_blank" rel="noopener"
+                   title="Scarica PDF" aria-label="Scarica il PDF di ${esc(x.titolo || "questa sessione")}">${ICONE_MENU.pdf}</a>`
+              : `<span class="btn icona piccolo" aria-hidden="true" style="visibility:hidden"></span>`}
+            </div>`).join("")}</div>`
           : `<div class="secondario piccolo">Nessuna sessione: avvia la trascrizione qui sopra.</div>`}
         </div>
         <div class="blocco-sx" id="incerti-box"></div>
         <div class="blocco-sx">
-          <div class="etichetta-lato">Affidabilità del progetto</div>
-          ${torta(p.qualita)}
+          ${s
+            ? `<div class="etichetta-lato">Affidabilità della sessione</div>${torta(s.qualita)}`
+            : `<div class="etichetta-lato">Affidabilità del progetto</div>${torta(p.qualita)}`}
         </div>
       </aside>
 
@@ -508,7 +755,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
           ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
                 : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
           <button class="btn grande" id="copia">Copia testo</button>
-          <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chiedi su questa sessione</a>
+          <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chat su questa sessione</a>
         </div>` : ""}
       </section>
     </div>`;
@@ -552,6 +799,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
     $("#proc-trascrizione").hidden = tipo !== "trascrizione";
     $("#proc-riassunto").hidden = tipo !== "riassunto";
     memoria("processo-scelto", tipo);
+    window.effetti?.indicatori();
   };
   $$(".switch-processi button").forEach(b => b.onclick = () => mostraProcesso(b.dataset.proc));
   mostraProcesso(memoria("processo-scelto") === "riassunto" ? "riassunto" : "trascrizione");
@@ -645,7 +893,10 @@ function pannelloProcesso(slug, tipo, box) {
     const firma = `${s.attivo}|${s.in_chiusura}`;
     if (bottoni.dataset.firma !== firma) {
       bottoni.dataset.firma = firma;
-      if (!s.attivo) bottoni.innerHTML = `<button class="btn primario" data-a="avvia">Avvia</button>`;
+      if (!s.attivo) bottoni.innerHTML = tipo === "trascrizione"
+        ? `<button class="btn primario" data-a="avvia" title="Continua l'ultima sessione">Continua sessione</button>
+           <button class="btn" data-a="nuova" title="Inizia una sessione nuova con un riassunto suo">Nuova sessione</button>`
+        : `<button class="btn primario" data-a="avvia">Avvia</button>`;
       else if (!s.in_chiusura) bottoni.innerHTML = `<button class="btn" data-a="ferma">Ferma</button>`;
       else bottoni.innerHTML = `<button class="btn pericolo" data-a="subito" title="Il pezzo in lavorazione si riprende al prossimo avvio">Chiudi subito</button>`;
     }
@@ -657,8 +908,8 @@ function pannelloProcesso(slug, tipo, box) {
     if (!a) return;
     e.target.disabled = true;
     try {
-      if (a === "avvia") {
-        stato = await api(`${url}/avvia`, { method: "POST" });
+      if (a === "avvia" || a === "nuova") {
+        stato = await api(`${url}/avvia${a === "nuova" ? "?nuova=true" : ""}`, { method: "POST" });
         offset = -1; errori = 0; log.innerHTML = "";
       } else if (a === "ferma") {
         stato = await api(`${url}/ferma`, { method: "POST" });
@@ -901,7 +1152,7 @@ async function vistaCerca(query) {
 }
 
 /* ===================================================================
-   Chiedi
+   Chat
    =================================================================== */
 
 const ESEMPI_CHAT = [
@@ -910,120 +1161,182 @@ const ESEMPI_CHAT = [
   "Riassumi i passaggi segnati come incerti",
 ];
 
-async function vistaChat(query) {
+const ICONA_AI = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>`;
+const ICONA_INVIA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>`;
+
+const oraBreve = iso => { const d = iso ? new Date(iso) : new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+/*
+ * Chat sui documenti dei progetti (pagina «Chat»).
+ * La conversazione resta salvata per ambito (progetto + sessione) finché il browser è aperto.
+ */
+async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmbito, domanda = "" }) {
   const [progetti, catalogo] = await Promise.all([api("/api/progetti"), api("/api/chat/modelli")]);
   let modello = memoria("chat-modello") || catalogo.predefinito;
   if (!catalogo.modelli.some(m => m.id === modello)) modello = catalogo.predefinito;
-  const prog = query.get("progetto") || "";
-  const sess = query.get("sessione") || "";
-  const progetto = prog ? await api(`/api/progetti/${enc(prog)}`) : null;
+  const progetto = prog ? await api(`/api/progetti/${enc(prog)}`).catch(() => null) : null;
   const chiave = `chat:${prog}:${sess}`;
   let storico = [];
   try { storico = JSON.parse(sessionStorage.getItem(chiave) || "[]"); } catch (e) {}
   const memorizza = () => { try { sessionStorage.setItem(chiave, JSON.stringify(storico)); } catch (e) {} };
-  const linkAmbito = (p, s) => `#/chat?${new URLSearchParams({ ...(p ? { progetto: p } : {}), ...(s ? { sessione: s } : {}) })}`;
 
-  vista.innerHTML = `
-    ${hero("Chiedi ai tuoi progetti")}
-    <div class="sotto-hero">
-      <div class="pannello riempi">
-        <div class="chat-barra">
-          <select id="ambito-progetto" aria-label="Progetto">
-            <option value="">Tutti i progetti attivi</option>
-            ${progetti.map(p => `<option value="${esc(p.slug)}" ${p.slug === prog ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+  box.innerHTML = `
+    <div class="chat ${compatta ? "chat-compatta" : ""}">
+      <div class="chat-barra">
+        <select class="ambito-progetto" aria-label="Progetto">
+          <option value="">Tutti i progetti attivi</option>
+          ${progetti.map(p => `<option value="${esc(p.slug)}" ${p.slug === prog ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+        </select>
+        <select class="ambito-sessione" aria-label="Sessione" ${progetto ? "" : "disabled"}>
+          <option value="">Tutte le sessioni</option>
+          ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
+        </select>
+        <span class="spazio"></span>
+        <div class="gruppo-modello">
+          <select class="scelta-modello" aria-label="Modello che risponde">
+            ${catalogo.modelli.map(m => `<option value="${esc(m.id)}" ${m.id === modello ? "selected" : ""}>${esc(m.nome)} · ${esc(m.autore)}</option>`).join("")}
           </select>
-          <select id="ambito-sessione" aria-label="Sessione" ${progetto ? "" : "disabled"}>
-            <option value="">${progetto ? "Tutte le sessioni" : "Tutte le sessioni"}</option>
-            ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
-          </select>
-          <span class="spazio"></span>
-          <label class="check" for="modello">Modello
-            <select id="modello">
-              ${catalogo.modelli.map(m => `<option value="${esc(m.id)}" ${m.id === modello ? "selected" : ""}>${esc(m.nome)} · ${esc(m.autore)}</option>`).join("")}
-            </select></label>
-          <button class="btn fantasma" id="nuova">Nuova conversazione</button>
+          ${compatta ? "" : `<div class="modello-info"></div>`}
         </div>
-        <div class="modello-info" id="modello-info"></div>
-        <div class="messaggi scorre" id="messaggi" aria-live="polite"></div>
-        <div class="pannello-piede">
-          <form class="composer" id="composer">
-            <textarea id="domanda" rows="2" placeholder="Fai una domanda su chiamate, riunioni e corsi" aria-label="Domanda"></textarea>
-            <button class="btn primario grande" id="invia">Invia</button>
-          </form>
-        </div>
+        <button class="btn fantasma piccolo nuova" type="button" title="Nuova conversazione">Nuova</button>
       </div>
+      <div class="messaggi" aria-live="polite"></div>
+      <form class="composer">
+        <textarea rows="1" placeholder="Scrivi una domanda…" aria-label="Domanda"></textarea>
+        <button class="btn primario invia" aria-label="Invia" title="Invia (Invio)">${ICONA_INVIA}</button>
+      </form>
     </div>`;
 
-  const box = $("#messaggi");
-  function fontiHtml(fonti) {
-    if (!fonti?.length) return "";
-    return `<div class="fonti"><strong>Fonti</strong>${fonti.map((f, i) =>
-      `<a href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}">[${i + 1}] ${esc(f.nome_progetto)} · ${esc(f.titolo || data(sessioneIso(f.sessione)))}</a>`).join("")}</div>`;
-  }
-  function disegna(attesa = false) {
-    if (!storico.length && !attesa) {
-      box.innerHTML = `<div class="esempi">${ESEMPI_CHAT.map(e => `<button class="btn verde" type="button" data-esempio="${esc(e)}">${esc(e)}</button>`).join("")}</div>`;
-      $$("[data-esempio]", box).forEach(b => b.onclick = () => { $("#domanda").value = b.dataset.esempio; invia(); });
+  const q = sel => box.querySelector(sel);
+  const lista = q(".messaggi"), campo = q("textarea"), bottone = q(".invia");
+
+  const fontiHtml = fonti => !fonti?.length ? "" : `<div class="fonti">${fonti.map((f, i) =>
+    `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))}</a>`).join("")}</div>`;
+
+  const htmlMessaggio = m => m.ruolo === "utente"
+    ? `<div class="msg utente"><div class="bolla">${esc(m.testo)}</div><div class="msg-meta">${oraBreve(m.ora)}</div></div>`
+    : `<div class="msg ${m.errore ? "errore" : "assistente"}">
+        <div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
+        <div class="msg-corpo">
+          <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}</div>
+          <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · ${esc(m.modello)} · ${m.secondi}s` : ""}${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} lento` : ""}</div>
+        </div>
+      </div>`;
+
+  function disegnaTutto() {
+    if (!storico.length) {
+      lista.innerHTML = `<div class="chat-vuota">
+          <div class="avatar-ai grande-ai" aria-hidden="true">${ICONA_AI}</div>
+          <strong>Chat con i tuoi progetti</strong>
+          <span class="secondario">${prog ? esc(progetto?.nome || "") + (sess ? " · una sessione" : "") : "Tutti i progetti attivi"}</span>
+          <div class="esempi">${ESEMPI_CHAT.map(e => `<button class="chip" type="button" data-esempio="${esc(e)}">${esc(e)}</button>`).join("")}</div>
+        </div>`;
+      lista.querySelectorAll("[data-esempio]").forEach(b => b.onclick = () => { campo.value = b.dataset.esempio; invia(); });
+      window.effetti?.entrata(lista.querySelectorAll(".chat-vuota > *"));
+      window.effetti?.galleggia(lista.querySelectorAll(".chip"));
       return;
     }
-    box.innerHTML = storico.map(m => m.ruolo === "utente"
-      ? `<div class="msg utente"><div class="bolla">${esc(m.testo)}</div></div>`
-      : `<div class="msg ${m.errore ? "errore" : "assistente"}"><div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}${m.modello ? `<div class="secondario piccolo modello-firma">Risposto da ${esc(m.modello)} in ${m.secondi}s${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} non rispondeva` : ""}</div>` : ""}</div></div>`
-    ).join("") + (attesa ? `<div class="msg assistente"><div class="bolla secondario">Sto cercando…</div></div>` : "");
-    box.scrollTop = box.scrollHeight;
+    lista.innerHTML = storico.map(htmlMessaggio).join("");
+    lista.scrollTop = lista.scrollHeight;
+  }
+
+  function aggiungi(m, rivela = false) {
+    lista.querySelector(".chat-vuota")?.remove();
+    lista.insertAdjacentHTML("beforeend", htmlMessaggio(m));
+    const el = lista.lastElementChild;
+    window.effetti?.messaggio(el, rivela);
+    lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
+    return el;
   }
 
   let occupato = false;
   async function invia() {
-    const domanda = $("#domanda").value.trim();
+    const domanda = campo.value.trim();
     if (!domanda || occupato) return;
     occupato = true;
-    $("#invia").disabled = true;
+    bottone.disabled = true;
     const precedente = storico.filter(m => !m.errore).map(m => ({ ruolo: m.ruolo, testo: m.testo }));
-    storico.push({ ruolo: "utente", testo: domanda });
-    $("#domanda").value = "";
-    disegna(true);
+    const msgUtente = { ruolo: "utente", testo: domanda, ora: new Date().toISOString() };
+    storico.push(msgUtente);
+    campo.value = "";
+    adattaAltezza();
+    aggiungi(msgUtente);
+    // "sta scrivendo…": tre puntini come nelle chat online
+    lista.insertAdjacentHTML("beforeend", `<div class="msg assistente digitando"><div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
+      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo">Cerco nei tuoi documenti…</span></div></div>`);
+    const digitando = lista.lastElementChild;
+    window.effetti?.messaggio(digitando);
+    lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
+    let risposta;
     try {
       const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess, modello } });
-      storico.push({ ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati });
+      risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati, ora: new Date().toISOString() };
     } catch (e) {
-      storico.push({ ruolo: "assistente", testo: e.message, errore: true });
+      risposta = { ruolo: "assistente", testo: e.message, errore: true, ora: new Date().toISOString() };
     }
+    storico.push(risposta);
     memorizza();
     occupato = false;
-    if (!document.body.contains(box)) return;     // nel frattempo si è cambiata pagina
-    $("#invia").disabled = false;
-    disegna();
-    $("#domanda").focus();
+    if (!document.body.contains(lista)) return;      // nel frattempo la chat è stata chiusa
+    digitando.remove();
+    aggiungi(risposta, true);
+    bottone.disabled = false;
+    campo.focus();
   }
 
-  $("#composer").onsubmit = e => { e.preventDefault(); invia(); };
-  $("#domanda").addEventListener("keydown", e => {
+  function adattaAltezza() {
+    campo.style.height = "auto";
+    campo.style.height = Math.min(campo.scrollHeight, 160) + "px";
+  }
+
+  q(".composer").onsubmit = e => { e.preventDefault(); invia(); };
+  campo.addEventListener("input", adattaAltezza);
+  campo.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); invia(); }
   });
   const descriviModello = () => {
+    const info = q(".modello-info");
+    if (!info) return;
     const m = catalogo.modelli.find(x => x.id === modello);
-    $("#modello-info").innerHTML = `${m.punti.map(p => `<span class="tag successo">${esc(p)}</span>`).join("")} <span>${esc(m.descrizione)}</span>`;
+    info.innerHTML = `${m.punti.map(p => `<span class="tag successo">${esc(p)}</span>`).join("")} <span>${esc(m.descrizione)}</span>`;
   };
-  $("#modello").onchange = e => { modello = e.target.value; memoria("chat-modello", modello); descriviModello(); };
+  q(".scelta-modello").onchange = e => { modello = e.target.value; memoria("chat-modello", modello); descriviModello(); };
   descriviModello();
-  // quali modelli rispondono adesso (i gratuiti a volte sono fermi): segnati nel menu
   api("/api/chat/stato").then(stato => {
-    if (!document.body.contains(box)) return;
-    for (const o of $$("#modello option")) {
+    if (!document.body.contains(lista)) return;
+    for (const o of q(".scelta-modello").options) {
       const m = catalogo.modelli.find(x => x.id === o.value);
-      o.textContent = `${m.nome} · ${m.autore}${stato[o.value] === false ? " — non risponde ora" : ""}`;
+      o.textContent = `${m.nome} · ${m.autore}${stato[o.value] === false ? " — lento ora" : ""}`;
     }
     if (stato[modello] === false) {
       const buono = catalogo.modelli.find(x => stato[x.id]);
-      if (buono) { modello = buono.id; $("#modello").value = modello; descriviModello(); }
+      if (buono) { modello = buono.id; q(".scelta-modello").value = modello; descriviModello(); }
     }
   }).catch(() => {});
-  $("#nuova").onclick = () => { storico = []; memorizza(); disegna(); $("#domanda").focus(); };
-  $("#ambito-progetto").onchange = e => location.hash = linkAmbito(e.target.value, "");
-  $("#ambito-sessione").onchange = e => location.hash = linkAmbito(prog, e.target.value);
-  disegna();
-  $("#domanda").focus();
+  q(".nuova").onclick = () => { storico = []; memorizza(); disegnaTutto(); campo.focus(); };
+  q(".ambito-progetto").onchange = e => cambiaAmbito(e.target.value, "");
+  q(".ambito-sessione").onchange = e => cambiaAmbito(prog, e.target.value);
+  disegnaTutto();
+  campo.focus();
+  if (domanda) { campo.value = domanda; invia(); }
+}
+
+async function vistaChat(query) {
+  vista.innerHTML = `
+    ${hero("Chat")}
+    <div class="sotto-hero"><div class="pannello riempi chat-pagina"></div></div>`;
+  const domanda = query.get("domanda") || "";
+  if (domanda) {
+    // la domanda arriva dalla home: la si invia una volta sola, senza lasciarla nell'indirizzo
+    const pulito = new URLSearchParams(query);
+    pulito.delete("domanda");
+    history.replaceState(null, "", `#/chat${pulito.toString() ? `?${pulito}` : ""}`);
+    hashPrecedente = location.hash;
+  }
+  await creaChat($(".chat-pagina"), {
+    prog: query.get("progetto") || "", sess: query.get("sessione") || "", domanda,
+    cambiaAmbito: (p, s) => { location.hash = `#/chat?${new URLSearchParams({ ...(p ? { progetto: p } : {}), ...(s ? { sessione: s } : {}) })}`; },
+  });
 }
 
 /* ===================================================================

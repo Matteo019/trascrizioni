@@ -78,7 +78,7 @@ Regole:
 - Passaggi tecnici poco chiari: tienili nella loro sezione con
   "**[INCERTO]** trascritto: «...» → probabilmente: «...»".
 - Rumore (frasi di servizio, chiacchiere, frammenti senza senso, allucinazioni): NON metterlo negli argomenti,
-  ma elencalo alla fine in "### Rumore e passaggi non pertinenti", una riga per caso:
+  ma elencalo alla fine (solo il rumore vero: un passaggio con contenuto tecnico va negli argomenti, mai qui) in "### Rumore e passaggi non pertinenti", una riga per caso:
   "- [orario] trascritto: «...» → probabilmente: «...» (oppure: non interpretabile)".
 - NON inventare nulla, NON aggiungere decisioni o action item, niente frasi introduttive o conclusive.
 
@@ -96,10 +96,11 @@ con eventuali sottosezioni "####", elenchi puntati e procedure numerate. Usa **g
 menu e parametri. Una tabella solo se aiuta davvero (es. elenco di campi con caratteristiche).
 In fondo "### Domande e risposte" se presenti, e per ultima "### Rumore e passaggi non pertinenti"
 con TUTTE le righe di rumore degli appunti in ordine di orario (orario, trascritto, interpretazione probabile).
+Nel rumore va solo ciò che non ha contenuto tecnico: un passaggio già riportato negli argomenti NON si ripete lì.
 Mantieni i marcatori **[INCERTO]** dentro le sezioni.
 
 Regole fondamentali:
-- Usa solo titoli di livello ### e ####: niente # o ##.
+- Usa solo titoli di livello ### e ####: niente # o ##, e un solo gruppo di # per titolo (mai "### ### ...").
 - Unisci i contenuti dello stesso argomento ed elimina solo le ripetizioni identiche.
 - NON perdere nessun dettaglio tecnico presente negli appunti (campi, valori, passaggi, avvertenze, esempi).
 - NON inventare nulla, NON aggiungere decisioni o action item.
@@ -107,6 +108,11 @@ Regole fondamentali:
 
 Appunti:
 {appunti}"""
+
+
+def titoli_puliti(testo: str) -> str:
+    """'### ### Argomento' -> '### Argomento': alcuni modelli ripetono i # del titolo."""
+    return re.sub(r"^(#{1,6})(?:[ \t]+#{1,6})+[ \t]+", r"\1 ", testo, flags=re.M)
 
 
 class RispostaTroncata(Exception):
@@ -263,10 +269,14 @@ def aggiorna_riassunto(client: OpenAI, nome: str):
         intestazione = f"<!-- appunti: {impronta} -->\n"
 
         if file_parte.exists() and file_parte.read_text(encoding="utf-8").startswith(intestazione):
-            corpo = file_parte.read_text(encoding="utf-8")[len(intestazione):]
+            letto = file_parte.read_text(encoding="utf-8")[len(intestazione):]
+            corpo = titoli_puliti(letto)
+            if corpo != letto:                  # parte salvata con titoli sporchi: si sistema senza rigenerarla
+                scrivi_atomico(file_parte, intestazione + corpo)
+                cambiato = True
         else:
             print(f"[{ora()}] Riassumo parte {numero} ({inizio}-{fine}) ...")
-            corpo = llm(client, PROMPT_PARTE.format(inizio=inizio, fine=fine, appunti=sorgente), 16000)
+            corpo = titoli_puliti(llm(client, PROMPT_PARTE.format(inizio=inizio, fine=fine, appunti=sorgente), 16000))
             scrivi_atomico(file_parte, intestazione + corpo + "\n")
             cambiato = True
         testi_parti.append((numero, inizio, fine, corpo.strip()))

@@ -20,6 +20,7 @@ import sys
 import time
 import wave
 import queue
+import shutil
 import threading
 import datetime
 from pathlib import Path
@@ -45,6 +46,9 @@ BLOCK = 1024
 WHISPER_RATE = 16000
 SILENCE_RMS = 300
 RIPROVA_ASCOLTO_SECONDI = 10   # cuffie che cambiano modalità o si scollegano: si riprova a riaprirle
+# il cavo virtuale manda dati anche nel silenzio: se per qualche secondo non arriva nulla
+# la cattura si è bloccata (es. Windows che riconfigura l'audio quando le cuffie Bluetooth cambiano modalità)
+SENZA_AUDIO_SECONDI = 5
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
 LANGUAGE = "it"
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
@@ -63,16 +67,27 @@ HALLUCINATIONS = {
 
 PROGETTO_DIR = path_progetto(argomento_progetto())
 OUT_DIR = PROGETTO_DIR / "trascrizioni"
-# riavviare la trascrizione durante la stessa chiamata non deve creare una sessione nuova
-RIPRENDI_MINUTI = 30
+STORICO_DIR = PROGETTO_DIR / "storico"
 
 
 def sessione_da_usare() -> str:
-    """L'ultima trascrizione non archiviata, se toccata da poco; altrimenti una sessione nuova."""
-    if OUT_DIR.exists():
-        recenti = sorted(OUT_DIR.glob("trascrizione_*.txt"), key=lambda f: f.stat().st_mtime)
-        if recenti and time.time() - recenti[-1].stat().st_mtime < RIPRENDI_MINUTI * 60:
-            return recenti[-1].stem.removeprefix("trascrizione_")
+    """
+    Una sessione nuova nasce SOLO se chiesta (NUOVA_SESSIONE=1, dal bottone "Nuova sessione")
+    o se il progetto non ne ha ancora; altrimenti si continua l'ultima, anche dopo ore.
+    Se l'ultima era già stata archiviata in storico/ se ne rimette una copia in trascrizioni/:
+    la copia in storico resta come segnalibro del riassunto, che riparte dal testo nuovo.
+    """
+    if os.environ.get("NUOVA_SESSIONE") != "1":
+        nomi = {f.stem.removeprefix("trascrizione_")
+                for cartella in (OUT_DIR, STORICO_DIR) if cartella.exists()
+                for f in cartella.glob("trascrizione_*.txt")}
+        if nomi:
+            ultima = max(nomi)               # il nome è la data-ora d'inizio: il massimo è la più recente
+            aperta, archiviata = OUT_DIR / f"trascrizione_{ultima}.txt", STORICO_DIR / f"trascrizione_{ultima}.txt"
+            if not aperta.exists():
+                OUT_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(archiviata, aperta)
+            return ultima
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
@@ -170,7 +185,13 @@ class Ascolto:
         if self.idx is None:
             return
         self.prossimo_tentativo = time.time() + RIPROVA_ASCOLTO_SECONDI
-        info = sd.query_devices(self.idx)
+        try:
+            info = sd.query_devices(self.idx)
+        except Exception as exc:            # cuffie sparite: la trascrizione non deve fermarsi
+            if not self.avvisato:
+                print(f"[WARN] Cuffie non disponibili ({str(exc)[:80]}): la trascrizione continua.")
+                self.avvisato = True
+            return
         errore = None
         for rate in dict.fromkeys([SAMPLE_RATE, int(info["default_samplerate"]), 44100, 32000, 16000]):
             for canali in (2, 1):
@@ -241,7 +262,24 @@ def find_cut(rms: list, min_blocks: int) -> int:
     return min_blocks + int(np.argmin(values[min_blocks:]))
 
 
+def riapri_dispositivi(nome_ascolto):
+    """
+    Riavvia PortAudio (così vede di nuovo i dispositivi come sono adesso) e ritrova
+    il cavo virtuale e le cuffie per nome: dopo una riconfigurazione gli indici possono cambiare.
+    """
+    sd._terminate()
+    sd._initialize()
+    capture_idx = find_capture_device()
+    monitor_idx = None
+    if nome_ascolto:
+        monitor_idx = next((i for i, n in dispositivi_ascolto() if n == nome_ascolto), None)
+        if monitor_idx is None:
+            print(f"[WARN] Cuffie «{nome_ascolto}» non trovate: la trascrizione continua senza ascolto.")
+    return capture_idx, monitor_idx
+
+
 def capture_audio(capture_idx: int, monitor_idx):
+    nome_ascolto = sd.query_devices(monitor_idx)["name"] if monitor_idx is not None else None
     monitor = Ascolto(monitor_idx)
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
@@ -261,27 +299,63 @@ def capture_audio(capture_idx: int, monitor_idx):
     def on_audio(indata, frames, time_info, status):
         raw.put(indata.copy())
 
-    with sd.InputStream(device=capture_idx, samplerate=SAMPLE_RATE, channels=2,
-                        dtype="int16", blocksize=BLOCK, callback=on_audio):
-        while not stop_event.is_set():
+    bloccata = False
+    while not stop_event.is_set():
+        if bloccata:
+            # l'audio non arrivava più: si riaprono cattura e cuffie, l'audio già raccolto resta
+            monitor.chiudi()
             try:
-                data = raw.get(timeout=0.5)
-            except queue.Empty:
+                capture_idx, monitor_idx = riapri_dispositivi(nome_ascolto)
+            except BaseException as exc:       # anche SystemExit: cavo non trovato, si riprova
+                print(f"[ERRORE] Cattura audio non disponibile ({str(exc).splitlines()[0][:100]}): riprovo tra 3 s.")
+                stop_event.wait(3)
                 continue
-            monitor.scrivi(data)
-            blocks.append(data)
-            rms.append(block_rms(data))
+            monitor = Ascolto(monitor_idx)
+        try:
+            stream = sd.InputStream(device=capture_idx, samplerate=SAMPLE_RATE, channels=2,
+                                    dtype="int16", blocksize=BLOCK, callback=on_audio)
+            stream.start()
+        except Exception as exc:
+            print(f"[ERRORE] Impossibile aprire la cattura audio ({str(exc)[:100]}): riprovo tra 3 s.")
+            bloccata = True
+            stop_event.wait(3)
+            continue
+        if bloccata:
+            print("[AUDIO] Cattura audio ripristinata: la trascrizione riprende.")
+        bloccata = False
+        ultimo_audio = time.time()
+        try:
+            while not stop_event.is_set():
+                try:
+                    data = raw.get(timeout=0.5)
+                except queue.Empty:
+                    if time.time() - ultimo_audio > SENZA_AUDIO_SECONDI:
+                        print(f"[ERRORE] L'audio della chiamata non arriva più da {SENZA_AUDIO_SECONDI} s "
+                              "(cattura bloccata): la riapro.")
+                        bloccata = True
+                        break
+                    continue
+                ultimo_audio = time.time()
+                monitor.scrivi(data)
+                blocks.append(data)
+                rms.append(block_rms(data))
 
-            # pausa = volume molto sotto il livello medio del parlato di questo blocco
-            threshold = max(SILENCE_RMS, 0.2 * float(np.mean(rms)))
-            quiet_run = quiet_run + 1 if rms[-1] < threshold else 0
+                # pausa = volume molto sotto il livello medio del parlato di questo blocco
+                threshold = max(SILENCE_RMS, 0.2 * float(np.mean(rms)))
+                quiet_run = quiet_run + 1 if rms[-1] < threshold else 0
 
-            if len(blocks) >= min_blocks and quiet_run >= pause_blocks:
-                emit(len(blocks) - quiet_run // 2)
-                quiet_run = 0
-            elif len(blocks) >= max_blocks:
-                emit(find_cut(rms, min_blocks))
-                quiet_run = 0
+                if len(blocks) >= min_blocks and quiet_run >= pause_blocks:
+                    emit(len(blocks) - quiet_run // 2)
+                    quiet_run = 0
+                elif len(blocks) >= max_blocks:
+                    emit(find_cut(rms, min_blocks))
+                    quiet_run = 0
+        finally:
+            try:
+                stream.abort()
+                stream.close()
+            except Exception:
+                pass
 
     if blocks:
         emit(len(blocks))
@@ -447,6 +521,10 @@ def main():
                 try:
                     chunk, start = audio_queue.get(timeout=1)
                 except queue.Empty:
+                    if not cattura.is_alive():
+                        # errore imprevisto nella cattura: si esce con errore, così la dashboard lo mostra
+                        print("[ERRORE] La cattura audio si è fermata per un errore: riavvia la trascrizione.")
+                        sys.exit(1)
                     continue
                 trascrivi(chunk, start, transcript, attempts=4)
                 retry_failed(groq_client, transcript)

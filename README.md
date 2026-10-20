@@ -5,7 +5,7 @@ Continui a sentire la chiamata nelle tue cuffie (anche Bluetooth) mentre viene t
 Tutto si gestisce da una dashboard nel browser, in locale: niente terminale, niente database.
 
 - Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito
-- Riassunto e «Chiedi»: modelli NVIDIA gratuiti
+- Riassunti e chat: modelli NVIDIA gratuiti
 
 ## Struttura
 
@@ -37,7 +37,7 @@ Al primo avvio la vecchia cartella `trascrizioni/` viene spostata da sola in `pr
    estrai lo zip, tasto destro su `VBCABLE_Setup_x64.exe` → *Esegui come amministratore* → Install.
 3. **API key** (si inseriscono in dashboard → Impostazioni):
    - Groq (trascrizione): https://console.groq.com/keys
-   - NVIDIA (riassunti e Chiedi): https://build.nvidia.com
+   - NVIDIA (riassunti e chat): https://build.nvidia.com
 
 ## Configurazione audio
 
@@ -64,7 +64,7 @@ Non serve attivare "Ascolta questo dispositivo" in Windows: è lo script a riman
    o copiare il testo formattato.
 5. **Ferma** chiude in modo ordinato (il riassunto elabora l'ultimo pezzo); **Chiudi subito** interrompe
    senza perdere testo già scritto.
-6. **Chiedi**: domande sulle tue chiamate, con il modello NVIDIA che scegli; risponde solo dai tuoi documenti e cita le fonti.
+6. **Chat**: domande sulle tue chiamate, con il modello NVIDIA che scegli; risponde solo dai tuoi documenti e cita le fonti.
 7. La **barra di ricerca** in alto (tasto `\`) e il **Calendario** lavorano su tutti i progetti; cliccando un giorno del calendario vedi le sue sessioni in colonne per stato. Per spegnere: Impostazioni → *Chiudi dashboard*.
 
 ## Note

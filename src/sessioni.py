@@ -150,6 +150,9 @@ TAG_AMMESSI = re.compile(r"&lt;(/?)(br|b|i|u|em|strong|sub|sup)\s*/?\s*(?:>|&gt;
 def md_in_html(testo: str) -> str:
     # il testo viene da trascrizioni e modelli AI: niente HTML grezzo nella pagina
     testo = testo.replace("&", "&amp;").replace("<", "&lt;")
+    # alcuni modelli ripetono i # del titolo ("### ### Argomento"): resterebbero visibili come testo
+    testo = re.sub(r"^(#{1,6})(?:[ \t]+#{1,6})+[ \t]+", r"\1 ", testo, flags=re.M)
+    testo = re.sub(r"^(\s*[-*+]\s+)#{1,6}[ \t]+", r"\1", testo, flags=re.M)   # e nelle voci dell'indice
     # i modelli rientrano i sotto-elenchi di 2 spazi, Markdown ne vuole 4
     if re.search(r"^(?:    )*  (?:[-*+]|\d+\.)\s", testo, flags=re.M):
         testo = re.sub(r"^( +)(?=(?:[-*+]|\d+\.)\s)", lambda m: m.group(1) * 2, testo, flags=re.M)
