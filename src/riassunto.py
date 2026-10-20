@@ -15,6 +15,7 @@ Uso (dalla cartella del progetto):
 
 import os
 import re
+import hashlib
 import sys
 import time
 import datetime
@@ -27,6 +28,9 @@ from comune import CONFIG_DIR, TRASCRIZIONI_DIR
 INTERVALLO_MINUTI = float(os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", "10"))
 MIN_NUOVI_CARATTERI = 1500          # sotto questa soglia aspetta altro testo
 MAX_CARATTERI_PER_BLOCCO = 15000    # backlog lunghi vengono spezzati
+# Il riassunto finale è diviso in parti (~1-1.5 ore di appunti ciascuna): ogni chiamata resta ben sotto
+# il limite di output (16k token) e le parti chiuse non vengono più rigenerate.
+MAX_CARATTERI_PER_PARTE = 24000
 TIMEOUT_SECONDI = 300
 # Il servizio gratuito NVIDIA a volte rende un modello non disponibile (404): si passa al successivo.
 MODELLI = [m.strip() for m in os.environ.get(
@@ -74,23 +78,21 @@ Regole:
 Trascrizione:
 {testo}"""
 
-PROMPT_RIASSUNTO = """Qui sotto ci sono gli appunti dettagliati di tutta la sessione finora, scritti blocco per blocco
-(quindi lo stesso argomento può comparire più volte). Riorganizzali in UN unico documento Markdown in italiano.
+PROMPT_PARTE = """Qui sotto ci sono gli appunti dettagliati di una PARTE della sessione (dalle {inizio} alle {fine}),
+scritti blocco per blocco (quindi lo stesso argomento può comparire più volte).
+Riorganizzali in un documento Markdown in italiano che inizia ESATTAMENTE così:
 
-Struttura:
-# Riassunto della sessione
-## Panoramica
-Breve paragrafo (3-5 righe) con gli argomenti trattati.
-## Indice
-Elenco degli argomenti.
-Poi una sezione "## <Argomento>" per ogni argomento, nell'ordine in cui sono stati trattati,
-con eventuali sottosezioni "###", elenchi puntati e procedure numerate. Usa **grassetto** per nomi di campi,
+**Panoramica:** breve paragrafo (2-4 righe) con gli argomenti trattati in questa parte.
+
+Poi una sezione "### <Argomento>" per ogni argomento, nell'ordine in cui sono stati trattati,
+con eventuali sottosezioni "####", elenchi puntati e procedure numerate. Usa **grassetto** per nomi di campi,
 menu e parametri. Una tabella solo se aiuta davvero (es. elenco di campi con caratteristiche).
-In fondo "## Domande e risposte" se presenti, e per ultima "## Rumore e passaggi non pertinenti"
+In fondo "### Domande e risposte" se presenti, e per ultima "### Rumore e passaggi non pertinenti"
 con TUTTE le righe di rumore degli appunti in ordine di orario (orario, trascritto, interpretazione probabile).
 Mantieni i marcatori **[INCERTO]** dentro le sezioni.
 
 Regole fondamentali:
+- Usa solo titoli di livello ### e ####: niente # o ##.
 - Unisci i contenuti dello stesso argomento ed elimina solo le ripetizioni identiche.
 - NON perdere nessun dettaglio tecnico presente negli appunti (campi, valori, passaggi, avvertenze, esempi).
 - NON inventare nulla, NON aggiungere decisioni o action item.
@@ -98,6 +100,10 @@ Regole fondamentali:
 
 Appunti:
 {appunti}"""
+
+
+class RispostaTroncata(Exception):
+    pass
 
 
 def llm(client: OpenAI, prompt: str, max_tokens: int) -> str:
@@ -115,7 +121,11 @@ def llm(client: OpenAI, prompt: str, max_tokens: int) -> str:
                     temperature=0.2,
                     max_tokens=max_tokens,
                 )
-                testo = risposta.choices[0].message.content or ""
+                scelta = risposta.choices[0]
+                if scelta.finish_reason == "length":
+                    # risposta tagliata a max_tokens: salvarla vorrebbe dire perdere la parte finale
+                    raise RispostaTroncata(f"risposta troncata a {max_tokens} token")
+                testo = scelta.message.content or ""
                 testo = re.sub(r"<think>.*?</think>", "", testo, flags=re.S).strip()
                 if testo:
                     print(f"           ok con {modello} in {time.time() - inizio:.0f}s")
@@ -140,11 +150,84 @@ def blocchi(testo: str):
     return righe
 
 
-def elabora(client: OpenAI, trascrizione: Path, forza: bool) -> bool:
+def ora() -> str:
+    return f"{datetime.datetime.now():%H:%M:%S}"
+
+
+def scrivi_atomico(path: Path, testo: str):
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(testo, encoding="utf-8")
+    tmp.replace(path)
+
+
+def parti_da_appunti(appunti: str) -> list:
+    """
+    Raggruppa i blocchi degli appunti in parti di al massimo MAX_CARATTERI_PER_PARTE.
+    Il raggruppamento è deterministico e i blocchi vengono solo aggiunti in coda,
+    quindi una parte chiusa non cambia più e non va rigenerata.
+    """
+    blocchi_appunti = [b for b in re.split(r"\n(?=## Blocco )", appunti) if b.strip().startswith("## Blocco")]
+    parti, corrente = [], []
+    for blocco in blocchi_appunti:
+        if corrente and sum(map(len, corrente)) + len(blocco) > MAX_CARATTERI_PER_PARTE:
+            parti.append(corrente)
+            corrente = []
+        corrente.append(blocco)
+    if corrente:
+        parti.append(corrente)
+    return parti
+
+
+def orari_parte(blocchi_parte: list):
+    orari = re.findall(r"\[(\d\d:\d\d)(?::\d\d)?", "\n".join(b.splitlines()[0] for b in blocchi_parte))
+    return (orari[0], orari[-1]) if orari else ("?", "?")
+
+
+def aggiorna_riassunto(client: OpenAI, nome: str):
+    """Rigenera solo le parti i cui appunti sono cambiati, poi ricompone riassunto_X.md."""
+    appunti = RIASSUNTI_DIR / f"appunti_{nome}.md"
+    riassunto = RIASSUNTI_DIR / f"riassunto_{nome}.md"
+    cartella_parti = RIASSUNTI_DIR / f"parti_{nome}"
+    if not appunti.exists():
+        return
+    cartella_parti.mkdir(exist_ok=True)
+
+    parti = parti_da_appunti(appunti.read_text(encoding="utf-8"))
+    cambiato = not riassunto.exists()
+    testi_parti = []
+    for numero, blocchi_parte in enumerate(parti, start=1):
+        sorgente = "\n".join(blocchi_parte)
+        impronta = hashlib.sha256(sorgente.encode("utf-8")).hexdigest()[:16]
+        file_parte = cartella_parti / f"parte_{numero:02d}.md"
+        inizio, fine = orari_parte(blocchi_parte)
+        intestazione = f"<!-- appunti: {impronta} -->\n"
+
+        if file_parte.exists() and file_parte.read_text(encoding="utf-8").startswith(intestazione):
+            corpo = file_parte.read_text(encoding="utf-8")[len(intestazione):]
+        else:
+            print(f"[{ora()}] Riassumo parte {numero} ({inizio}-{fine}) ...")
+            corpo = llm(client, PROMPT_PARTE.format(inizio=inizio, fine=fine, appunti=sorgente), 16000)
+            scrivi_atomico(file_parte, intestazione + corpo + "\n")
+            cambiato = True
+        testi_parti.append((numero, inizio, fine, corpo.strip()))
+
+    if not cambiato:
+        return
+
+    indice = ["# Riassunto della sessione", "", "## Indice", ""]
+    for numero, inizio, fine, corpo in testi_parti:
+        indice.append(f"- **Parte {numero} ({inizio}-{fine})**")
+        for titolo in re.findall(r"^### (.+)$", corpo, flags=re.M):
+            indice.append(f"  - {titolo.strip()}")
+    sezioni = [f"## Parte {numero} ({inizio}-{fine})\n\n{corpo}" for numero, inizio, fine, corpo in testi_parti]
+    scrivi_atomico(riassunto, "\n".join(indice) + "\n\n---\n\n" + "\n\n---\n\n".join(sezioni) + "\n")
+    print(f"[{ora()}] Fatto: {riassunto}")
+
+
+def elabora(client: OpenAI, trascrizione: Path, forza: bool):
     nome = trascrizione.stem.removeprefix("trascrizione_")
     storico = STORICO_DIR / trascrizione.name
     appunti = RIASSUNTI_DIR / f"appunti_{nome}.md"
-    riassunto = RIASSUNTI_DIR / f"riassunto_{nome}.md"
 
     gia_fatto = storico.stat().st_size if storico.exists() else 0
     with open(trascrizione, "rb") as f:
@@ -154,29 +237,17 @@ def elabora(client: OpenAI, trascrizione: Path, forza: bool) -> bool:
     nuovo = nuovo[: nuovo.rfind(b"\n") + 1]
     testo = nuovo.decode("utf-8", errors="replace")
 
-    if not testo.strip() or (len(testo) < MIN_NUOVI_CARATTERI and not forza):
-        return False
+    if testo.strip() and (len(testo) >= MIN_NUOVI_CARATTERI or forza):
+        for blocco in blocchi(testo):
+            prima, ultima = blocco.strip().splitlines()[0][:10], blocco.strip().splitlines()[-1][:10]
+            print(f"[{ora()}] {trascrizione.name}: appunti {prima}-{ultima} ...")
+            note = llm(client, PROMPT_APPUNTI.format(testo=blocco), 6000)
+            with open(appunti, "a", encoding="utf-8") as f:
+                f.write(f"\n## Blocco {prima} - {ultima}\n\n{note}\n")
+            with open(storico, "ab") as f:
+                f.write(blocco.encode("utf-8"))
 
-    for blocco in blocchi(testo):
-        prima, ultima = blocco.strip().splitlines()[0][:10], blocco.strip().splitlines()[-1][:10]
-        print(f"[{datetime.datetime.now():%H:%M:%S}] {trascrizione.name}: appunti {prima}-{ultima} ...")
-        note = llm(client, PROMPT_APPUNTI.format(testo=blocco), 6000)
-        with open(appunti, "a", encoding="utf-8") as f:
-            f.write(f"\n## Blocco {prima} - {ultima}\n\n{note}\n")
-        with open(storico, "ab") as f:
-            f.write(blocco.encode("utf-8"))
-
-    print(f"[{datetime.datetime.now():%H:%M:%S}] Aggiorno {riassunto.name} ...")
-    documento = llm(
-        client,
-        PROMPT_RIASSUNTO.format(appunti=appunti.read_text(encoding="utf-8")),
-        16000,
-    )
-    tmp = riassunto.with_suffix(".tmp")
-    tmp.write_text(documento + "\n", encoding="utf-8")
-    tmp.replace(riassunto)
-    print(f"[{datetime.datetime.now():%H:%M:%S}] Fatto: {riassunto}")
-    return True
+    aggiorna_riassunto(client, nome)
 
 
 def ciclo(client: OpenAI, forza: bool):
