@@ -311,7 +311,7 @@ async function aggiornaHeader() {
     $("#processi-attivi").innerHTML = processi.map(p => `
       <a class="tag ${p.in_chiusura ? "avviso" : "successo"} vivo" href="#/p/${enc(p.progetto)}"
          title="${esc(NOMI_TIPO[p.tipo])} in corso su ${esc(p.nome_progetto)}">
-        <span class="punto"></span>${esc(NOMI_TIPO[p.tipo])} · ${esc(p.nome_progetto)}</a>`).join("");
+        <span class="punto"></span><span class="tag-testo">${esc(NOMI_TIPO[p.tipo])} · ${esc(p.nome_progetto)}</span></a>`).join("");
   } catch (e) { /* la vista mostrerà l'errore */ }
 }
 setInterval(aggiornaHeader, 3000);
@@ -342,7 +342,12 @@ document.addEventListener("keydown", e => {
   if (e.key === "\\" && !inCampo && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     $("#ricerca-globale").focus();
-  } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft") && !inCampo) {
+  } else if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key) && $$(".topnav a")[+e.key - 1]) {
+    // Alt+1..4: sezione diretta
+    e.preventDefault();
+    location.hash = $$(".topnav a")[+e.key - 1].getAttribute("href");
+  } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")
+             && (!inCampo || !document.activeElement.value)) {
     // Ctrl+← / Ctrl+→: sezione precedente / successiva della barra in alto
     e.preventDefault();
     const voci = $$(".topnav a");
@@ -448,18 +453,17 @@ async function vistaProgetto(slug, nomeSessione, tab) {
   if (nomeSessione && !s) throw new Error("Sessione non trovata.");
   const link = (t, n = nome) => `#/p/${enc(slug)}${n ? `/s/${n}` : ""}?tab=${t}`;
   if (!SCHEDE_SESSIONE.some(([k]) => k === tab)) tab = "riassunto";
-  const diSessione = true;
   const pdf = s && (s.ha_riassunto || s.ha_appunti);
 
+  // a sinistra (30%) tutto quello che serve a guidare, a destra (70%) il documento
   vista.innerHTML = `
-    <section class="hero hero-progetto"><div class="hero-dentro">
-      <div class="breadcrumb"><a href="#/">Progetti</a> / ${esc(p.nome)}</div>
-      <div class="azioni" style="justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h1 class="sinistra" style="margin:0">${esc(p.nome)}${p.stato === "archiviato" ? ' <span class="tag">Archiviato</span>' : ""}</h1>
-        <div class="azioni">
-          <a class="btn verde" href="#/chat?progetto=${enc(slug)}">Chiedi</a>
+    <div class="progetto-layout">
+      <aside class="progetto-sx">
+        <div class="breadcrumb"><a href="#/">Progetti</a> / ${esc(p.nome)}</div>
+        <div class="progetto-titolo">
+          <h1>${esc(p.nome)}${p.stato === "archiviato" ? ' <span class="tag">Archiviato</span>' : ""}</h1>
           <div class="menu-altro">
-            <button class="btn icona" id="altro" aria-label="Altre azioni" title="Altre azioni" aria-haspopup="true">⋯</button>
+            <button class="btn icona piccolo" id="altro" aria-label="Altre azioni" title="Altre azioni" aria-haspopup="true">⋯</button>
             <div class="menu-altro-lista" hidden>
               <button id="apri">Apri cartella</button>
               <button id="rinomina">Rinomina</button>
@@ -468,54 +472,53 @@ async function vistaProgetto(slug, nomeSessione, tab) {
             </div>
           </div>
         </div>
-      </div>
-      <div class="comandi-progetto">
-        <div class="processo" id="proc-trascrizione"></div>
-        <div class="processo" id="proc-riassunto"></div>
-      </div>
-    </div></section>
+        <div class="processi-card">
+          <div class="switch-processi" role="tablist" aria-label="Trascrizione o riassunto">
+            ${["trascrizione", "riassunto"].map(t => `<button role="tab" data-proc="${t}">${NOMI_TIPO[t]}<span class="sw-stato"></span></button>`).join("")}
+          </div>
+          <div class="processo" id="proc-trascrizione"></div>
+          <div class="processo" id="proc-riassunto"></div>
+        </div>
+        <div class="blocco-sx">
+          <div class="etichetta-lato">Sessioni</div>
+          ${sessioni.length ? `<div class="sessioni-lista">${sessioni.map(x => `
+            <a class="sessione-voce ${x.nome === nome ? "attiva" : ""}" href="${link(tab, x.nome)}">
+              <span class="t">${esc(x.titolo || "Senza titolo")}</span>
+              <span class="d">${data(x.inizio)}${x.ora_inizio ? ` · ${x.ora_inizio}` : ""}
+                ${x.in_corso ? '<span class="tag attesa vivo"><span class="punto"></span>in corso</span>' : ""}
+                ${x.qualita.totale ? `<span class="num" style="margin-left:auto" title="Incerto">${percento(x.qualita.incerto, x.qualita.totale)}</span>` : ""}</span>
+            </a>`).join("")}</div>`
+          : `<div class="secondario piccolo">Nessuna sessione: avvia la trascrizione qui sopra.</div>`}
+        </div>
+        <div class="blocco-sx" id="incerti-box"></div>
+        <div class="blocco-sx">
+          <div class="etichetta-lato">Affidabilità del progetto</div>
+          ${torta(p.qualita)}
+        </div>
+      </aside>
 
-    <div class="sotto-hero">
-      <div class="pannello riempi">
+      <section class="pannello progetto-dx">
         <nav class="tabs">
           ${SCHEDE_SESSIONE.map(([k, n]) => `<a href="${link(k)}" class="${tab === k ? "attivo" : ""}">${n}</a>`).join("")}
           <span class="spazio"></span>
           <a href="#/impostazioni?progetto=${enc(slug)}" class="secondario" title="Il contesto si modifica in Impostazioni">Contesto</a>
         </nav>
-        ${diSessione ? `
-          <div class="lavoro">
-            <aside class="lato">
-              <div>
-                <div class="etichetta-lato">Sessioni</div>
-                ${sessioni.length ? `<div class="sessioni-lista">${sessioni.map(x => `
-                  <a class="sessione-voce ${x.nome === nome ? "attiva" : ""}" href="${link(tab, x.nome)}">
-                    <span class="t">${esc(x.titolo || "Senza titolo")}</span>
-                    <span class="d">${data(x.inizio)}${x.ora_inizio ? ` · ${x.ora_inizio}` : ""}
-                      ${x.in_corso ? '<span class="tag attesa vivo"><span class="punto"></span>in corso</span>' : ""}
-                      ${x.qualita.totale ? `<span class="num" style="margin-left:auto" title="Incerto">${percento(x.qualita.incerto, x.qualita.totale)}</span>` : ""}</span>
-                  </a>`).join("")}</div>`
-                : `<div class="secondario piccolo">Nessuna sessione: avvia la trascrizione qui sopra.</div>`}
-              </div>
-              <div id="incerti-box"></div>
-              <div>
-                <div class="etichetta-lato">Affidabilità del progetto</div>
-                ${torta(p.qualita)}
-              </div>
-            </aside>
-            <div class="centro" id="scheda"></div>
-          </div>
-          ${s ? `<div class="pannello-piede">
-            ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
-                  : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
-            <button class="btn grande" id="copia" ${tab === "trascrizione" ? "" : ""}>Copia testo</button>
-            <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chiedi su questa sessione</a>
-          </div>` : ""}`
-        : `<div class="pannello-corpo scorre" id="scheda"></div>`}
-      </div>
+        <div class="centro" id="scheda"></div>
+        ${s ? `<div class="pannello-piede">
+          ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
+                : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
+          <button class="btn grande" id="copia">Copia testo</button>
+          <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chiedi su questa sessione</a>
+        </div>` : ""}
+      </section>
     </div>`;
 
   $("#altro").onclick = () => { const m = $(".menu-altro-lista"); m.hidden = !m.hidden; };
-  $("#apri").onclick = () => api(`/api/progetti/${enc(slug)}/apri-cartella`, { method: "POST" }).catch(e => toast(e.message, "errore"));
+  $("#apri").onclick = () => {
+    $(".menu-altro-lista").hidden = true;
+    api(`/api/progetti/${enc(slug)}/apri-cartella`, { method: "POST" })
+      .then(() => toast("Cartella aperta in Esplora file", "ok")).catch(e => toast(e.message, "errore"));
+  };
   $("#rinomina").onclick = async () => {
     const v = await dialogo({ titolo: "Rinomina progetto", conferma: "Rinomina", campi: [{ id: "nome", label: "Nome", valore: p.nome }] });
     if (!v) return;
@@ -539,6 +542,19 @@ async function vistaProgetto(slug, nomeSessione, tab) {
 
   pannelloProcesso(slug, "trascrizione", $("#proc-trascrizione"));
   pannelloProcesso(slug, "riassunto", $("#proc-riassunto"));
+  // un'unica card: il selettore sceglie quale dei due processi mostrare
+  const mostraProcesso = tipo => {
+    $$(".switch-processi button").forEach(b => {
+      const scelto = b.dataset.proc === tipo;
+      b.classList.toggle("attivo", scelto);
+      b.setAttribute("aria-selected", scelto);
+    });
+    $("#proc-trascrizione").hidden = tipo !== "trascrizione";
+    $("#proc-riassunto").hidden = tipo !== "riassunto";
+    memoria("processo-scelto", tipo);
+  };
+  $$(".switch-processi button").forEach(b => b.onclick = () => mostraProcesso(b.dataset.proc));
+  mostraProcesso(memoria("processo-scelto") === "riassunto" ? "riassunto" : "trascrizione");
 
   if (!s) {
     $("#scheda").innerHTML = `<div class="vuoto"><strong>Ancora nessuna sessione</strong>Apri «Trascrizione» qui sopra e premi Avvia quando inizia la chiamata.</div>`;
@@ -622,6 +638,8 @@ function pannelloProcesso(slug, tipo, box) {
     else if (s.codice_uscita) tag = '<span class="tag pericolo">Errore</span>';
     else tag = '<span class="tag">Fermo</span>';
     $(".processo-stato", box).innerHTML = tag;
+    const sw = $(`.switch-processi [data-proc="${tipo}"] .sw-stato`);
+    if (sw) sw.innerHTML = tag;
 
     const bottoni = $(".bottoni", box);
     const firma = `${s.attivo}|${s.in_chiusura}`;
@@ -950,7 +968,7 @@ async function vistaChat(query) {
     }
     box.innerHTML = storico.map(m => m.ruolo === "utente"
       ? `<div class="msg utente"><div class="bolla">${esc(m.testo)}</div></div>`
-      : `<div class="msg ${m.errore ? "errore" : "assistente"}"><div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}${m.modello ? `<div class="secondario piccolo modello-firma">${esc(m.modello)} · ${m.secondi}s</div>` : ""}</div></div>`
+      : `<div class="msg ${m.errore ? "errore" : "assistente"}"><div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}${m.modello ? `<div class="secondario piccolo modello-firma">Risposto da ${esc(m.modello)} in ${m.secondi}s${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} non rispondeva` : ""}</div>` : ""}</div></div>`
     ).join("") + (attesa ? `<div class="msg assistente"><div class="bolla secondario">Sto cercando…</div></div>` : "");
     box.scrollTop = box.scrollHeight;
   }
@@ -967,7 +985,7 @@ async function vistaChat(query) {
     disegna(true);
     try {
       const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess, modello } });
-      storico.push({ ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi });
+      storico.push({ ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati });
     } catch (e) {
       storico.push({ ruolo: "assistente", testo: e.message, errore: true });
     }
@@ -989,6 +1007,18 @@ async function vistaChat(query) {
   };
   $("#modello").onchange = e => { modello = e.target.value; memoria("chat-modello", modello); descriviModello(); };
   descriviModello();
+  // quali modelli rispondono adesso (i gratuiti a volte sono fermi): segnati nel menu
+  api("/api/chat/stato").then(stato => {
+    if (!document.body.contains(box)) return;
+    for (const o of $$("#modello option")) {
+      const m = catalogo.modelli.find(x => x.id === o.value);
+      o.textContent = `${m.nome} · ${m.autore}${stato[o.value] === false ? " — non risponde ora" : ""}`;
+    }
+    if (stato[modello] === false) {
+      const buono = catalogo.modelli.find(x => stato[x.id]);
+      if (buono) { modello = buono.id; $("#modello").value = modello; descriviModello(); }
+    }
+  }).catch(() => {});
   $("#nuova").onclick = () => { storico = []; memorizza(); disegna(); $("#domanda").focus(); };
   $("#ambito-progetto").onchange = e => location.hash = linkAmbito(e.target.value, "");
   $("#ambito-sessione").onchange = e => location.hash = linkAmbito(prog, e.target.value);
@@ -1121,9 +1151,12 @@ async function vistaCalendario(query) {
 async function vistaImpostazioni(query) {
   const [i, progetti] = await Promise.all([api("/api/impostazioni"), api("/api/progetti")]);
   const progScelto = progetti.some(p => p.slug === query.get("progetto")) ? query.get("progetto") : (progetti[0]?.slug || "");
+  // come la trascrizione: il dispositivo va bene se il suo nome CONTIENE quanto salvato (es. "AirPods")
   const disp = i.valori.MONITOR_DEVICE;
+  const trovato = disp ? i.dispositivi.find(d => d.toLowerCase().includes(disp.toLowerCase())) : "";
   const opzioni = [...i.dispositivi];
-  if (disp && !opzioni.some(d => d === disp)) opzioni.unshift(disp);
+  if (disp && !trovato) opzioni.unshift(disp);
+  const scelto = trovato || disp;
   const chiave = (k, nome, link) => `
     <div class="campo">
       <label for="${k}">${nome} ${i.chiavi[k] ? '<span class="tag successo">Impostata</span>' : '<span class="tag pericolo">Mancante</span>'}</label>
@@ -1148,12 +1181,12 @@ async function vistaImpostazioni(query) {
               <div class="campo-riga">
                 <select id="MONITOR_DEVICE">
                   <option value="">Nessuno (non sentire la chiamata)</option>
-                  ${opzioni.map(d => `<option ${d === disp ? "selected" : ""}>${esc(d)}</option>`).join("")}
+                  ${opzioni.map(d => `<option ${d === scelto ? "selected" : ""}>${esc(d)}</option>`).join("")}
                 </select>
                 <button class="btn" id="ricarica-disp" title="Rileggi i dispositivi collegati">Aggiorna</button>
               </div>
               ${i.errore_audio ? `<div class="aiuto" style="color:var(--danger-text)">Non riesco a leggere i dispositivi audio: ${esc(i.errore_audio)}</div>` : ""}
-              ${disp && !i.dispositivi.includes(disp) ? `<div class="aiuto" style="color:var(--warning-text)">«${esc(disp)}» ora non è collegato.</div>` : ""}
+              ${disp && !trovato ? `<div class="aiuto" style="color:var(--warning-text)">«${esc(disp)}» ora non è collegato.</div>` : ""}
             </div>
             <div class="campo">
               <label for="RIASSUNTO_INTERVALLO_MINUTI">Riassunto ogni (minuti)</label>

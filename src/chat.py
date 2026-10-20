@@ -4,6 +4,7 @@ Nessun indice: si scelgono i pezzi più pertinenti con un conteggio di parole, a
 """
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import time
@@ -15,12 +16,12 @@ import sessioni
 
 # modelli gratuiti dell'endpoint NVIDIA tra cui si sceglie nella chat
 MODELLI = [
-    {"id": "google/gemma-4-31b-it", "nome": "Gemma 4 31B", "autore": "Google",
-     "descrizione": "Equilibrato: ragiona bene e risponde in fretta, in modo ordinato. Va bene per quasi tutte le domande.",
-     "punti": ["Equilibrato", "Veloce"]},
     {"id": "openai/gpt-oss-20b", "nome": "GPT-OSS 20B", "autore": "OpenAI",
      "descrizione": "Piccolo e rapidissimo, solo testo. Bravo in ragionamenti brevi e calcoli: ideale per domande puntuali.",
      "punti": ["Il più veloce", "Logica e calcoli"]},
+    {"id": "google/gemma-4-31b-it", "nome": "Gemma 4 31B", "autore": "Google",
+     "descrizione": "Equilibrato: ragiona bene e risponde in modo ordinato. Va bene per quasi tutte le domande.",
+     "punti": ["Equilibrato"]},
     {"id": "nvidia/nemotron-3-ultra-550b-a55b", "nome": "Nemotron 3 Ultra", "autore": "NVIDIA",
      "descrizione": "Il più potente: ragionamento profondo e contesto lunghissimo, per domande complesse. Più lento, e condivide i limiti con i riassunti.",
      "punti": ["Massima qualità", "Più lento"]},
@@ -30,7 +31,11 @@ MODELLO_PREDEFINITO = MODELLI[0]["id"]
 MAX_CARATTERI_CONTESTO = 12000
 MAX_SEZIONI = 8
 MAX_CARATTERI_SEZIONE = 3000
-TIMEOUT_SECONDI = 90          # un modello gratuito che non risponde in 90 s di solito è fermo
+# un modello gratuito che non risponde in 40 s di solito è fermo: si passa al successivo
+TIMEOUT_SECONDI = 40
+TIMEOUT_PROVA_SECONDI = 25
+DURATA_STATO_SECONDI = 180
+_stato_modelli = {"quando": 0.0, "stato": {}}
 
 PAROLE_VUOTE = set("""il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cui non come
 dove quando quale quali quanto cosa cos è sono era del dello della dei degli delle al allo alla ai agli alle
@@ -39,7 +44,7 @@ quello quella ci si ne mi ti vi lui lei noi voi loro mio tuo suo anche più molt
 essere stato detto dice spiegato spiega parlato""".split())
 
 SISTEMA = """Sei l'assistente di chi partecipa a queste chiamate (riunioni con clienti, chiamate con colleghi, corsi...).
-Rispondi in italiano, in Markdown, in modo chiaro e pratico.
+Rispondi in italiano, in Markdown, in modo chiaro e pratico. Solo Markdown: mai tag HTML (per andare a capo in una tabella usa ";").
 Usa SOLO le informazioni nei documenti qui sotto (riassunti, appunti e trascrizioni delle sessioni).
 Se la risposta non c'è, dillo chiaramente e suggerisci cosa cercare; non inventare mai.
 Quando usi un'informazione, indica tra parentesi quadre la fonte, es. [2]. I passaggi segnati [INCERTO] vanno riportati come incerti.
@@ -224,14 +229,44 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
 
     client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,
                     timeout=TIMEOUT_SECONDI, max_retries=0)
-    nome = next(m["nome"] for m in MODELLI if m["id"] == modello)
-    inizio = time.time()
-    try:
-        r = client.chat.completions.create(model=modello, messages=messaggi, temperature=0.2, max_tokens=4000)
-    except Exception as exc:
-        raise RuntimeError(f"{nome} non ha risposto ({str(exc)[:120]}). Riprova o scegli un altro modello.")
-    testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
-    if not testo:
-        raise RuntimeError(f"{nome} ha dato una risposta vuota. Riprova o scegli un altro modello.")
-    return {"risposta": testo, "fonti": elenco_fonti, "modello": modello, "nome_modello": nome,
-            "secondi": round(time.time() - inizio)}
+    # prima il modello scelto, poi gli altri: se uno dei gratuiti è fermo risponde il successivo
+    ordine = [modello] + [m["id"] for m in MODELLI if m["id"] != modello]
+    nomi = {m["id"]: m["nome"] for m in MODELLI}
+    saltati = []
+    for prova in ordine:
+        inizio = time.time()
+        try:
+            r = client.chat.completions.create(model=prova, messages=messaggi, temperature=0.2, max_tokens=3000)
+            testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+        except Exception:
+            testo = ""
+        if testo:
+            _stato_modelli["stato"][prova] = True
+            return {"risposta": testo, "fonti": elenco_fonti, "modello": prova, "nome_modello": nomi[prova],
+                    "secondi": round(time.time() - inizio), "saltati": saltati}
+        _stato_modelli["stato"][prova] = False
+        saltati.append(nomi[prova])
+    raise RuntimeError("Nessun modello NVIDIA ha risposto (" + ", ".join(saltati) + "). Riprova tra poco.")
+
+
+def stato_modelli() -> dict:
+    """Prova veloce di tutti i modelli in parallelo (risultato tenuto qualche minuto): {id: risponde?}."""
+    if time.time() - _stato_modelli["quando"] < DURATA_STATO_SECONDI and _stato_modelli["stato"]:
+        return _stato_modelli["stato"]
+    api_key = os.environ.get("NVIDIA_API_KEY", "")
+    if not api_key:
+        return {}
+    client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,
+                    timeout=TIMEOUT_PROVA_SECONDI, max_retries=0)
+
+    def prova(mid):
+        try:
+            client.chat.completions.create(model=mid, messages=[{"role": "user", "content": "ok"}], max_tokens=5)
+            return mid, True
+        except Exception:
+            return mid, False
+
+    with ThreadPoolExecutor(len(MODELLI)) as pool:
+        stato = dict(pool.map(prova, [m["id"] for m in MODELLI]))
+    _stato_modelli.update(quando=time.time(), stato=stato)
+    return stato

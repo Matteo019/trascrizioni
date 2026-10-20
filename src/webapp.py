@@ -50,15 +50,48 @@ app = FastAPI(title="Trascrizioni")
 # Processi figli
 # ---------------------------------------------------------------------------
 
+def pid_vivo(pid: int) -> bool:
+    """Il processo esiste ancora? (su Windows senza ucciderlo: os.kill(pid, 0) lo termina)"""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    codice = ctypes.c_ulong()
+    kernel32.GetExitCodeProcess(handle, ctypes.byref(codice))
+    kernel32.CloseHandle(handle)
+    return codice.value == 259                                # STILL_ACTIVE
+
+
 class Processo:
     def __init__(self, slug: str, tipo: str):
         self.slug, self.tipo = slug, tipo
         base = progetti.cartella(slug)
         self.log_path = base / f"{tipo}.log"
         self.stop_file = base / f".stop_{tipo}"
+        # il PID resta su disco: una dashboard riavviata ritrova i processi ancora in corso
+        self.pid_file = base / f".pid_{tipo}"
         self.popen = None
+        self.pid = None
         self.avviato = None
         self.stop_chiesto = self.ucciso = False
+        if self.pid_file.exists():
+            try:
+                pid = int(self.pid_file.read_text().strip())
+            except ValueError:
+                pid = 0
+            if pid and pid_vivo(pid):
+                self.pid = pid
+                self.avviato = datetime.datetime.fromtimestamp(self.pid_file.stat().st_mtime)
+                self.stop_chiesto = self.stop_file.exists()
+            else:
+                self.pid_file.unlink(missing_ok=True)
 
     def avvia(self, env_extra: dict):
         self.stop_file.unlink(missing_ok=True)
@@ -74,18 +107,31 @@ class Processo:
             cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         log.close()
+        self.pid = self.popen.pid
+        self.pid_file.write_text(str(self.pid))
         self.avviato = datetime.datetime.now()
         self.stop_chiesto = self.ucciso = False
 
     @property
     def attivo(self) -> bool:
-        return self.popen is not None and self.popen.poll() is None
+        if self.popen is not None:
+            vivo = self.popen.poll() is None
+        else:
+            vivo = self.pid is not None and pid_vivo(self.pid)
+        if not vivo:
+            self.pid_file.unlink(missing_ok=True)
+        return vivo
 
     def ferma(self, subito: bool):
         if not self.attivo:
             return
         if subito:
-            self.popen.kill()
+            # il python del venv avvia a sua volta l'interprete vero: si chiude tutto l'albero
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.pid)],
+                               capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            elif self.popen is not None:
+                self.popen.kill()
             self.ucciso = True
         else:
             # chiusura ordinata: lo script finisce il pezzo in corso (il riassunto elabora l'ultimo testo)
@@ -101,7 +147,7 @@ class Processo:
             "avviato": self.avviato.isoformat(timespec="seconds") if self.avviato else None,
             "in_chiusura": attivo and self.stop_chiesto,
             # chiuso a mano con "Chiudi subito": non è un errore dello script
-            "codice_uscita": None if attivo or self.popen is None or self.ucciso else self.popen.returncode,
+            "codice_uscita": None if attivo or self.popen is None or self.ucciso else self.popen.poll(),
         }
 
 
@@ -114,6 +160,16 @@ def processo(slug: str, tipo: str) -> Processo:
         raise HTTPException(404, "tipo di processo sconosciuto")
     with _lock:
         return PROCESSI.setdefault((slug, tipo), Processo(slug, tipo))
+
+
+def ritrova_processi():
+    """All'avvio: i processi lanciati da una dashboard precedente e ancora vivi tornano sotto controllo."""
+    for slug in progetti.elenco():
+        for tipo in SCRIPT:
+            if (progetti.cartella(slug) / f".pid_{tipo}").exists():
+                p = processo(slug, tipo)
+                if not p.attivo:
+                    PROCESSI.pop((slug, tipo), None)
 
 
 def stato_processi(slug: str = "") -> list:
@@ -203,8 +259,9 @@ def api_progetto(slug: str):
 @app.post("/api/progetti/{slug}/apri-cartella")
 def api_apri_cartella(slug: str):
     base = verifica_slug(slug)
-    if hasattr(os, "startfile"):
-        os.startfile(base)
+    # explorer.exe porta la finestra in primo piano (os.startfile da pythonw la apre dietro al browser)
+    if os.name == "nt":
+        subprocess.Popen(["explorer.exe", str(base.resolve())])
     return {"ok": True}
 
 
@@ -288,6 +345,11 @@ def api_cerca(q: str = "", progetto: str = "", tipi: str = "trascrizione,appunti
 @app.get("/api/chat/modelli")
 def api_chat_modelli():
     return {"modelli": chat.MODELLI, "predefinito": chat.MODELLO_PREDEFINITO}
+
+
+@app.get("/api/chat/stato")
+def api_chat_stato():
+    return chat.stato_modelli()
 
 
 @app.post("/api/chat")
@@ -443,6 +505,7 @@ def main():
         webbrowser.open(URL)
         return
     progetti.migra_vecchia_struttura()
+    ritrova_processi()
     if "--no-browser" not in sys.argv:
         threading.Timer(1.5, webbrowser.open, args=(URL,)).start()
     import uvicorn

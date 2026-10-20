@@ -44,6 +44,7 @@ SAMPLE_RATE = 48000
 BLOCK = 1024
 WHISPER_RATE = 16000
 SILENCE_RMS = 300
+RIPROVA_ASCOLTO_SECONDI = 10   # cuffie che cambiano modalità o si scollegano: si riprova a riaprirle
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
 LANGUAGE = "it"
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
@@ -62,7 +63,20 @@ HALLUCINATIONS = {
 
 PROGETTO_DIR = path_progetto(argomento_progetto())
 OUT_DIR = PROGETTO_DIR / "trascrizioni"
-SESSION_NAME = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+# riavviare la trascrizione durante la stessa chiamata non deve creare una sessione nuova
+RIPRENDI_MINUTI = 30
+
+
+def sessione_da_usare() -> str:
+    """L'ultima trascrizione non archiviata, se toccata da poco; altrimenti una sessione nuova."""
+    if OUT_DIR.exists():
+        recenti = sorted(OUT_DIR.glob("trascrizione_*.txt"), key=lambda f: f.stat().st_mtime)
+        if recenti and time.time() - recenti[-1].stat().st_mtime < RIPRENDI_MINUTI * 60:
+            return recenti[-1].stem.removeprefix("trascrizione_")
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+SESSION_NAME = sessione_da_usare()
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
 FAILED_DIR = PROGETTO_DIR / "da_ritrascrivere"
 GLOSSARIO_PATH = PROGETTO_DIR / "glossario.txt"
@@ -138,16 +152,78 @@ def choose_monitor_device():
         print("Scelta non valida.")
 
 
-def open_monitor_stream(idx):
-    if idx is None:
-        return None
-    try:
-        stream = sd.OutputStream(device=idx, samplerate=SAMPLE_RATE, channels=2, dtype="int16")
-        stream.start()
-        return stream
-    except Exception as exc:
-        print(f"[WARN] Impossibile riprodurre su {sd.query_devices(idx)['name']}: {exc}")
-        return None
+class Ascolto:
+    """
+    Rimanda l'audio della chiamata alle cuffie. Usa la frequenza che il dispositivo accetta
+    (le cuffie Bluetooth spesso rifiutano 48 kHz) convertendo l'audio al volo; se il dispositivo
+    cambia modalità o si scollega, riprova ad aprirlo ogni RIPROVA_ASCOLTO_SECONDI.
+    """
+
+    def __init__(self, idx):
+        self.idx, self.stream = idx, None
+        self.rate, self.canali = SAMPLE_RATE, 2
+        self.prossimo_tentativo = 0.0
+        self.avvisato = False
+        self.apri()
+
+    def apri(self):
+        if self.idx is None:
+            return
+        self.prossimo_tentativo = time.time() + RIPROVA_ASCOLTO_SECONDI
+        info = sd.query_devices(self.idx)
+        errore = None
+        for rate in dict.fromkeys([SAMPLE_RATE, int(info["default_samplerate"]), 44100, 32000, 16000]):
+            for canali in (2, 1):
+                try:
+                    stream = sd.OutputStream(device=self.idx, samplerate=rate, channels=canali, dtype="int16")
+                    stream.start()
+                except Exception as exc:
+                    errore = exc
+                    continue
+                self.stream, self.rate, self.canali = stream, rate, canali
+                if rate != SAMPLE_RATE or canali != 2 or self.avvisato:
+                    print(f"[AUDIO] Ascolto su {info['name']} a {rate} Hz, {canali} canali")
+                self.avvisato = False
+                return
+        if not self.avvisato:
+            print(f"[WARN] Impossibile riprodurre su {info['name']}: {errore}. "
+                  f"Riprovo ogni {RIPROVA_ASCOLTO_SECONDI}s (la trascrizione continua).")
+            self.avvisato = True
+
+    def converti(self, data: np.ndarray) -> np.ndarray:
+        if self.canali == 1:
+            data = data.mean(axis=1, keepdims=True)
+        if self.rate != SAMPLE_RATE:
+            n = len(data)
+            x = np.linspace(0, n - 1, max(1, round(n * self.rate / SAMPLE_RATE)))
+            data = np.stack([np.interp(x, np.arange(n), data[:, c]) for c in range(data.shape[1])], axis=1)
+        return np.ascontiguousarray(data.astype(np.int16))
+
+    def scrivi(self, data: np.ndarray):
+        if self.idx is None:
+            return
+        if self.stream is None:
+            if time.time() < self.prossimo_tentativo:
+                return
+            self.apri()
+            if self.stream is None:
+                return
+        try:
+            self.stream.write(self.converti(data))
+        except Exception as exc:
+            print(f"[WARN] Ascolto interrotto ({str(exc)[:80]}): riprovo tra poco.")
+            self.chiudi()
+            self.prossimo_tentativo = time.time() + 2
+            self.avvisato = True
+
+    def chiudi(self):
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +242,7 @@ def find_cut(rms: list, min_blocks: int) -> int:
 
 
 def capture_audio(capture_idx: int, monitor_idx):
-    monitor = open_monitor_stream(monitor_idx)
+    monitor = Ascolto(monitor_idx)
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
     min_blocks = int(MIN_CHUNK_SECONDS / block_seconds)
@@ -192,11 +268,7 @@ def capture_audio(capture_idx: int, monitor_idx):
                 data = raw.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if monitor is not None:
-                try:
-                    monitor.write(data)
-                except Exception:
-                    pass
+            monitor.scrivi(data)
             blocks.append(data)
             rms.append(block_rms(data))
 
@@ -213,9 +285,7 @@ def capture_audio(capture_idx: int, monitor_idx):
 
     if blocks:
         emit(len(blocks))
-    if monitor is not None:
-        monitor.stop()
-        monitor.close()
+    monitor.chiudi()
 
 
 # ---------------------------------------------------------------------------
@@ -346,9 +416,29 @@ def main():
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
     print("[INFO] Per i riassunti avvia a parte riassunto.py. Premi CTRL+C per fermare.\n")
 
-    threading.Thread(target=capture_audio, args=(capture_idx, monitor_idx), daemon=True).start()
+    cattura = threading.Thread(target=capture_audio, args=(capture_idx, monitor_idx), daemon=True)
+    cattura.start()
 
     previous_text = ""
+
+    def trascrivi(chunk, start, transcript, attempts):
+        nonlocal previous_text
+        if is_silent(chunk):
+            return
+        wav_bytes = to_whisper_wav(chunk)
+        text = transcribe_wav(groq_client, wav_bytes, build_prompt(previous_text), attempts=attempts)
+        if text is None:
+            path = save_failed(wav_bytes, start)
+            line = f"[{start:%H:%M:%S}] [AUDIO NON TRASCRITTO: salvato in {path.name}, verrà recuperato]"
+        elif text:
+            line = f"[{start:%H:%M:%S}] {text}"
+            previous_text = text
+        else:
+            return
+        print(line)
+        transcript.write(line + "\n")
+        transcript.flush()
+
     with open(TRANSCRIPT_PATH, "a", encoding="utf-8") as transcript:
         try:
             while True:
@@ -358,26 +448,15 @@ def main():
                     chunk, start = audio_queue.get(timeout=1)
                 except queue.Empty:
                     continue
-                if is_silent(chunk):
-                    continue
-                wav_bytes = to_whisper_wav(chunk)
-                text = transcribe_wav(groq_client, wav_bytes, build_prompt(previous_text), attempts=4)
-                if text is None:
-                    path = save_failed(wav_bytes, start)
-                    line = f"[{start:%H:%M:%S}] [AUDIO NON TRASCRITTO: salvato in {path.name}, verrà recuperato]"
-                    print(line)
-                    transcript.write(line + "\n")
-                    transcript.flush()
-                    continue
-                if text:
-                    line = f"[{start:%H:%M:%S}] {text}"
-                    print(line)
-                    transcript.write(line + "\n")
-                    transcript.flush()
-                    previous_text = text
+                trascrivi(chunk, start, transcript, attempts=4)
                 retry_failed(groq_client, transcript)
         except KeyboardInterrupt:
+            # chiusura ordinata: si trascrive anche il blocco in corso, non si perde l'ultimo minuto
             stop_event.set()
+            cattura.join(timeout=5)
+            while not audio_queue.empty():
+                chunk, start = audio_queue.get()
+                trascrivi(chunk, start, transcript, attempts=2)
             print(f"\n[INFO] Fermato. Trascrizione salvata in: {TRANSCRIPT_PATH}")
             if FAILED_DIR.exists() and any(FAILED_DIR.glob("*.wav")):
                 print(f"[INFO] Blocchi non trascritti in {FAILED_DIR}: verranno recuperati al prossimo avvio.")

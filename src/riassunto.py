@@ -39,7 +39,8 @@ TIMEOUT_SECONDI = 300
 # Il servizio gratuito NVIDIA a volte rende un modello non disponibile (404): si passa al successivo.
 MODELLI = [m.strip() for m in os.environ.get(
     "NEMOTRON_MODEL",
-    "nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/nemotron-3-super-120b-a12b",
+    # super-120b non è più disponibile sull'account (404); gpt-oss risponde in pochi secondi
+    "nvidia/nemotron-3-ultra-550b-a55b,openai/gpt-oss-20b,nvidia/nemotron-3.5-lightning-30b-a3b",
 ).split(",") if m.strip()]
 
 PROGETTO_DIR = path_progetto(argomento_progetto())
@@ -312,7 +313,8 @@ def elabora(client: OpenAI, trascrizione: Path, forza: bool):
         for blocco in blocchi(testo):
             prima, ultima = blocco.strip().splitlines()[0][:10], blocco.strip().splitlines()[-1][:10]
             print(f"[{ora()}] {trascrizione.name}: appunti {prima}-{ultima} ...")
-            note = llm(client, PROMPT_APPUNTI.format(testo=blocco), 6000)
+            # i modelli che "ragionano" consumano token prima di rispondere: margine ampio
+            note = llm(client, PROMPT_APPUNTI.format(testo=blocco), 12000)
             with open(appunti, "a", encoding="utf-8") as f:
                 f.write(f"\n## Blocco {prima} - {ultima}\n\n{note}\n")
             with open(storico, "ab") as f:

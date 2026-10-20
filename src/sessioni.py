@@ -144,6 +144,9 @@ def elenco_sessioni(slug: str) -> list:
 # Documenti leggibili
 # ---------------------------------------------------------------------------
 
+TAG_AMMESSI = re.compile(r"&lt;(/?)(br|b|i|u|em|strong|sub|sup)\s*/?\s*(?:>|&gt;)", re.I)
+
+
 def md_in_html(testo: str) -> str:
     # il testo viene da trascrizioni e modelli AI: niente HTML grezzo nella pagina
     testo = testo.replace("&", "&amp;").replace("<", "&lt;")
@@ -151,6 +154,9 @@ def md_in_html(testo: str) -> str:
     if re.search(r"^(?:    )*  (?:[-*+]|\d+\.)\s", testo, flags=re.M):
         testo = re.sub(r"^( +)(?=(?:[-*+]|\d+\.)\s)", lambda m: m.group(1) * 2, testo, flags=re.M)
     corpo = markdown.markdown(testo, extensions=["tables", "sane_lists", "fenced_code"])
+    # i modelli a volte usano qualche tag di formattazione (es. <br> nelle tabelle): si accettano
+    # solo questi, e solo senza attributi; qualsiasi altro HTML resta testo
+    corpo = TAG_AMMESSI.sub(lambda m: "<br>" if m.group(2) == "br" else f"<{m.group(1)}{m.group(2)}>", corpo)
     return corpo.replace("<strong>[INCERTO]</strong>", '<mark class="incerto">INCERTO</mark>')
 
 

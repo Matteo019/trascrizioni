@@ -1,5 +1,6 @@
 @echo off
-cd /d "%~dp0"
+rem si lavora dalla cartella principale del progetto, un livello sopra
+cd /d "%~dp0.."
 chcp 65001 >nul
 call :setup || exit /b 1
 ".venv\Scripts\python.exe" src\riassunto.py

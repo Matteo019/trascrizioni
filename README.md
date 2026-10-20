@@ -11,8 +11,9 @@ Tutto si gestisce da una dashboard nel browser, in locale: niente terminale, nie
 
 ```
 avvia_dashboard.bat      doppio clic: apre la dashboard (punto di ingresso principale)
-avvia_trascrizione.bat   uso da terminale, come prima (progetto "Corso Panthera")
-avvia_riassunto.bat      uso da terminale, come prima
+terminale/               avvio senza dashboard, da terminale (progetto "Corso Panthera")
+  avvia_trascrizione.bat
+  avvia_riassunto.bat
 .env                     le tue API key e impostazioni (si modificano dalla dashboard, mai su git)
 config/                  modelli di contesto.txt e glossario.txt copiati in ogni nuovo progetto
 src/                     codice (webapp.py è la dashboard)
