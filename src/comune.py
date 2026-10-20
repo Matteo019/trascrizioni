@@ -37,6 +37,16 @@ def scrivi_dotenv(valori: dict, path: Path = ENV_PATH):
     path.write_text("\n".join(righe) + "\n", encoding="utf-8")
 
 
+def valore_dotenv(chiave: str, path: Path = ENV_PATH) -> str:
+    """Valore attuale nel file .env (non quello letto all'avvio): cambia se lo modifichi dalle impostazioni."""
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not line.strip().startswith("#") and key.strip() == chiave:
+                return value.strip()
+    return ""
+
+
 def argomento_progetto() -> str:
     """Valore di --progetto <slug> dalla riga di comando, altrimenti il progetto predefinito."""
     if "--progetto" in sys.argv:

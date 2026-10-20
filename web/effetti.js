@@ -165,9 +165,8 @@
       { duration: 340, easing: MOLLA });
   }
 
-  /* ---------- visualizzatore audio: voce con pause ----------
-   * Si alternano tratti "parlati" (le barre salgono e scendono, il picco scorre verso destra) e
-   * silenzi (le barre si abbassano fino a una linea dritta). Il passaggio è sempre in dissolvenza. */
+  /* ---------- visualizzatore audio ----------
+   * Le barre salgono e scendono di continuo, il picco scorre verso destra. */
   function audioVivo(box) {
     if (!box) return;
     const barre = [...box.querySelectorAll("i")];
@@ -180,28 +179,17 @@
       barre.forEach((b, i) => { b.style.transform = `scaleY(${forma[i] * .5})`; b.style.opacity = base[i]; });
       return;
     }
-    let voce = 0;                       // 0 = silenzio, 1 = parla: cambia piano
-    let parla = true, prossimoCambio = performance.now() + 2500, precedente = performance.now();
-    const casuale = (min, max) => min + Math.random() * (max - min);
+    // sempre in movimento: niente pause né dissolvenze
     function passo(t) {
       if (!box.isConnected) return;     // pagina cambiata: l'animazione si ferma
-      if (t > prossimoCambio) {
-        parla = !parla;
-        prossimoCambio = t + (parla ? casuale(2200, 5200) : casuale(900, 1800));
-      }
-      // dissolvenza a tempo (non a fotogrammi): in ~0,5 s si passa da voce a linea dritta e ritorno
-      const dt = Math.min(100, t - precedente);
-      precedente = t;
-      voce += ((parla ? 1 : 0) - voce) * (1 - Math.exp(-dt / 300));
       const s = t / 1000;
       barre.forEach((b, i) => {
         // onda che scorre verso destra + un po' di irregolarità come una voce vera
         const onda = .5 + .5 * Math.sin(s * 3.1 - i * 0.32);
         const vibrato = .5 + .5 * Math.sin(s * 7.3 + i * 1.7) * Math.sin(s * 2.2 + i * .45);
         const ampiezza = forma[i] * (.25 + .75 * onda * (.55 + .45 * vibrato));
-        const scala = .045 + voce * ampiezza;                        // .045 = linea dritta del silenzio
-        b.style.transform = `scaleY(${scala.toFixed(3)})`;
-        b.style.opacity = (base[i] * (.12 + .88 * voce * voce)).toFixed(3);   // nelle pause quasi spenta
+        b.style.transform = `scaleY(${(.045 + ampiezza).toFixed(3)})`;
+        b.style.opacity = base[i].toFixed(3);
       });
       requestAnimationFrame(passo);
     }

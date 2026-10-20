@@ -21,6 +21,7 @@ import time
 import wave
 import queue
 import shutil
+import subprocess
 import threading
 import datetime
 from pathlib import Path
@@ -29,7 +30,7 @@ import numpy as np
 import sounddevice as sd
 from groq import Groq
 
-from comune import argomento_progetto, path_progetto, stop_richiesto, dispositivi_ascolto
+from comune import argomento_progetto, path_progetto, stop_richiesto, dispositivi_ascolto, valore_dotenv
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -49,6 +50,10 @@ RIPROVA_ASCOLTO_SECONDI = 10   # cuffie che cambiano modalità o si scollegano: 
 # il cavo virtuale manda dati anche nel silenzio: se per qualche secondo non arriva nulla
 # la cattura si è bloccata (es. Windows che riconfigura l'audio quando le cuffie Bluetooth cambiano modalità)
 SENZA_AUDIO_SECONDI = 5
+CUFFIE_MUTE_SECONDI = 15       # cuffie scelte che non suonano da così tanto: errore e riavvio dell'audio
+RIAVVIO_CUFFIE_OGNI = 60       # al massimo un riavvio dell'audio al minuto per colpa delle cuffie
+# se dal cavo arriva solo silenzio digitale da così tanto, si controlla dove Windows manda l'audio
+SILENZIO_CAVO_SECONDI = 20
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
 LANGUAGE = "it"
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
@@ -172,25 +177,48 @@ class Ascolto:
     Rimanda l'audio della chiamata alle cuffie. Usa la frequenza che il dispositivo accetta
     (le cuffie Bluetooth spesso rifiutano 48 kHz) convertendo l'audio al volo; se il dispositivo
     cambia modalità o si scollega, riprova ad aprirlo ogni RIPROVA_ASCOLTO_SECONDI.
+    Se dopo CUFFIE_MUTE_SECONDI ancora non suona è un errore vero: lo segnala e chiede di
+    riavviare l'audio (serve_riavvio), perché Windows a volte invalida il dispositivo per sempre.
+    Se nelle impostazioni l'ascolto viene tolto, smette senza errori.
     """
 
     def __init__(self, idx):
         self.idx, self.stream = idx, None
+        self.nome = sd.query_devices(idx)["name"] if idx is not None else None
         self.rate, self.canali = SAMPLE_RATE, 2
         self.prossimo_tentativo = 0.0
-        self.avvisato = False
+        self.guasto_dal = None          # da quando le cuffie non suonano
+        self.errore_dato = False
+        self.serve_riavvio = False
         self.apri()
 
+    def disattivato(self) -> bool:
+        """Cuffie tolte dalle impostazioni mentre la trascrizione gira: niente più tentativi né avvisi."""
+        if self.idx is not None and DA_DASHBOARD and not valore_dotenv("MONITOR_DEVICE"):
+            self.chiudi()
+            self.idx = None
+            self.serve_riavvio = False
+            print("[AUDIO] Ascolto in cuffia disattivato dalle impostazioni: la trascrizione continua.")
+        return self.idx is None
+
+    def guasto(self, motivo: str):
+        if self.guasto_dal is None:
+            self.guasto_dal = time.time()
+            print(f"[WARN] Ascolto in cuffia interrotto ({motivo[:90]}): riprovo (la trascrizione continua).")
+        elif not self.errore_dato and time.time() - self.guasto_dal > CUFFIE_MUTE_SECONDI:
+            self.errore_dato = True
+            self.serve_riavvio = True
+            print(f"[ERRORE] Non senti la chiamata in «{self.nome}» da {CUFFIE_MUTE_SECONDI} s: riavvio l'audio. "
+                  "Se continua, togli e rimetti le cuffie oppure scegli «nessuna» nelle impostazioni.")
+
     def apri(self):
-        if self.idx is None:
+        if self.disattivato():
             return
         self.prossimo_tentativo = time.time() + RIPROVA_ASCOLTO_SECONDI
         try:
             info = sd.query_devices(self.idx)
         except Exception as exc:            # cuffie sparite: la trascrizione non deve fermarsi
-            if not self.avvisato:
-                print(f"[WARN] Cuffie non disponibili ({str(exc)[:80]}): la trascrizione continua.")
-                self.avvisato = True
+            self.guasto(str(exc))
             return
         errore = None
         for rate in dict.fromkeys([SAMPLE_RATE, int(info["default_samplerate"]), 44100, 32000, 16000]):
@@ -202,14 +230,11 @@ class Ascolto:
                     errore = exc
                     continue
                 self.stream, self.rate, self.canali = stream, rate, canali
-                if rate != SAMPLE_RATE or canali != 2 or self.avvisato:
+                if rate != SAMPLE_RATE or canali != 2 or self.guasto_dal is not None:
                     print(f"[AUDIO] Ascolto su {info['name']} a {rate} Hz, {canali} canali")
-                self.avvisato = False
+                self.guasto_dal, self.errore_dato = None, False
                 return
-        if not self.avvisato:
-            print(f"[WARN] Impossibile riprodurre su {info['name']}: {errore}. "
-                  f"Riprovo ogni {RIPROVA_ASCOLTO_SECONDI}s (la trascrizione continua).")
-            self.avvisato = True
+        self.guasto(f"impossibile riprodurre su {info['name']}: {errore}")
 
     def converti(self, data: np.ndarray) -> np.ndarray:
         if self.canali == 1:
@@ -232,10 +257,9 @@ class Ascolto:
         try:
             self.stream.write(self.converti(data))
         except Exception as exc:
-            print(f"[WARN] Ascolto interrotto ({str(exc)[:80]}): riprovo tra poco.")
             self.chiudi()
             self.prossimo_tentativo = time.time() + 2
-            self.avvisato = True
+            self.guasto(str(exc))
 
     def chiudi(self):
         if self.stream is not None:
@@ -278,9 +302,48 @@ def riapri_dispositivi(nome_ascolto):
     return capture_idx, monitor_idx
 
 
+ultimo_suono = time.time()   # ultimo blocco non del tutto silenzioso arrivato dal cavo
+
+
+def uscita_predefinita() -> str:
+    """
+    Nome dell'uscita audio predefinita di Windows. Si legge in un processo a parte:
+    PortAudio qui dentro vede i dispositivi com'erano all'avvio, non i cambi successivi.
+    """
+    codice = "import sounddevice as sd; print(sd.query_devices(kind='output')['name'])"
+    r = subprocess.run([sys.executable, "-c", codice], capture_output=True, text=True, timeout=30,
+                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    return r.stdout.strip()
+
+
+def controlla_uscita():
+    """
+    Caso «io sento ma la trascrizione no»: quando si collegano le cuffie Windows spesso le rende
+    uscita predefinita, e Teams suona lì invece che su CABLE Input. Il cavo allora manda solo
+    silenzio. Se succede, si controlla l'uscita predefinita e lo si segnala.
+    """
+    segnalato = False
+    while not stop_event.wait(SILENZIO_CAVO_SECONDI):
+        if time.time() - ultimo_suono < SILENZIO_CAVO_SECONDI:
+            if segnalato:
+                print("[AUDIO] L'audio della chiamata arriva di nuovo alla trascrizione.")
+                segnalato = False
+            continue
+        try:
+            nome = uscita_predefinita()
+        except Exception:
+            continue
+        if nome and "cable" not in nome.lower() and not segnalato:
+            segnalato = True
+            print(f"[ERRORE] Windows manda l'audio a «{nome}» invece che a «CABLE Input»: tu senti la chiamata "
+                  "ma la trascrizione no. Rimetti CABLE Input come uscita (icona del volume di Windows, "
+                  "o altoparlante in Teams): la trascrizione riprende da sola.")
+
+
 def capture_audio(capture_idx: int, monitor_idx):
-    nome_ascolto = sd.query_devices(monitor_idx)["name"] if monitor_idx is not None else None
+    global ultimo_suono
     monitor = Ascolto(monitor_idx)
+    ultimo_riavvio_cuffie = 0.0
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
     min_blocks = int(MIN_CHUNK_SECONDS / block_seconds)
@@ -305,7 +368,7 @@ def capture_audio(capture_idx: int, monitor_idx):
             # l'audio non arrivava più: si riaprono cattura e cuffie, l'audio già raccolto resta
             monitor.chiudi()
             try:
-                capture_idx, monitor_idx = riapri_dispositivi(nome_ascolto)
+                capture_idx, monitor_idx = riapri_dispositivi(monitor.nome if monitor.idx is not None else None)
             except BaseException as exc:       # anche SystemExit: cavo non trovato, si riprova
                 print(f"[ERRORE] Cattura audio non disponibile ({str(exc).splitlines()[0][:100]}): riprovo tra 3 s.")
                 stop_event.wait(3)
@@ -336,6 +399,8 @@ def capture_audio(capture_idx: int, monitor_idx):
                         break
                     continue
                 ultimo_audio = time.time()
+                if data.any():
+                    ultimo_suono = ultimo_audio
                 monitor.scrivi(data)
                 blocks.append(data)
                 rms.append(block_rms(data))
@@ -350,6 +415,12 @@ def capture_audio(capture_idx: int, monitor_idx):
                 elif len(blocks) >= max_blocks:
                     emit(find_cut(rms, min_blocks))
                     quiet_run = 0
+
+                # cuffie che non tornano da sole: Windows le ha invalidate, serve riaprire tutto l'audio
+                if monitor.serve_riavvio and time.time() - ultimo_riavvio_cuffie > RIAVVIO_CUFFIE_OGNI:
+                    ultimo_riavvio_cuffie = time.time()
+                    bloccata = True
+                    break
         finally:
             try:
                 stream.abort()
@@ -492,6 +563,7 @@ def main():
 
     cattura = threading.Thread(target=capture_audio, args=(capture_idx, monitor_idx), daemon=True)
     cattura.start()
+    threading.Thread(target=controlla_uscita, daemon=True).start()
 
     previous_text = ""
 

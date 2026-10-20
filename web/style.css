@@ -1260,3 +1260,6 @@ body.home .header { display: none; }
 
 /* chat come una chat normale: la card stessa è una colonna centrale, con sfondo libero ai lati */
 .chat-pagina { width: min(960px, 100%); margin-left: auto; margin-right: auto; }
+
+/* home: saluto, casella chat e onde audio un po' più in basso */
+@media (min-width: 1200px) { .b-chat { padding-top: var(--sp-7); } }

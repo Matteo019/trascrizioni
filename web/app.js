@@ -1052,8 +1052,7 @@ async function schedaContesto(slug, box) {
     <div class="griglia contesto-griglia">${Object.entries(file).map(([k, f]) => `
       <div class="c6">
         <div class="card-testa"><strong>${f.titolo}</strong><span class="secondario piccolo">${f.aiuto}</span>
-          <span class="sporco" id="sporco-${k}"></span>
-          <div class="azioni"><button class="btn piccolo primario" id="salva-${k}">Salva</button></div></div>
+          <span class="sporco" id="sporco-${k}"></span></div>
         <textarea id="testo-${k}" spellcheck="false" aria-label="${f.titolo}">${esc(f.testo)}</textarea>
       </div>`).join("")}
     </div>`;
@@ -1061,20 +1060,18 @@ async function schedaContesto(slug, box) {
   const salvato = { contesto: contesto.testo, glossario: glossario.testo };
   const sporco = k => $(`#testo-${k}`).value !== salvato[k];
   const segna = k => $(`#sporco-${k}`).textContent = sporco(k) ? "Non salvato" : "";
+  // si salva col bottone "Salva" delle impostazioni (o Ctrl+S), insieme a tutto il resto
   async function salva(k) {
-    try {
-      const testo = $(`#testo-${k}`).value;
-      await api(url(k), { method: "PUT", body: { testo } });
-      salvato[k] = testo;
-      segna(k);
-      toast(`${file[k].titolo} salvato`, "ok");
-    } catch (e) { toast(e.message, "errore"); }
+    const testo = $(`#testo-${k}`).value;
+    await api(url(k), { method: "PUT", body: { testo } });
+    salvato[k] = testo;
+    segna(k);
   }
-  for (const k of Object.keys(file)) {
-    $(`#testo-${k}`).addEventListener("input", () => segna(k));
-    $(`#salva-${k}`).onclick = () => salva(k);
-  }
-  return { salva: () => Object.keys(file).filter(sporco).forEach(salva), sporco: () => Object.keys(file).some(sporco) };
+  for (const k of Object.keys(file)) $(`#testo-${k}`).addEventListener("input", () => segna(k));
+  return {
+    salva: () => Promise.all(Object.keys(file).filter(sporco).map(salva)),
+    sporco: () => Object.keys(file).some(sporco),
+  };
 }
 
 /* ===================================================================
@@ -1542,6 +1539,8 @@ async function vistaImpostazioni(query) {
       valori: { MONITOR_DEVICE: $("#MONITOR_DEVICE").value, RIASSUNTO_INTERVALLO_MINUTI: $("#RIASSUNTO_INTERVALLO_MINUTI").value },
     };
     try {
+      // un solo Salva per tutto: impostazioni, contesto e glossario del progetto scelto
+      await contesto?.salva();
       await api("/api/impostazioni", { method: "PUT", body });
       toast("Salvato", "ok");
       naviga();
@@ -1559,8 +1558,8 @@ async function vistaImpostazioni(query) {
   };
   if (progScelto) await caricaContesto(progScelto);
   $("#contesto-progetto")?.addEventListener("change", e => caricaContesto(e.target.value));
-  // Ctrl+S: salva il contesto se modificato, altrimenti le impostazioni
-  salvaCorrente = () => (contesto?.sporco() ? contesto.salva() : salva());
+  // Ctrl+S: come il bottone Salva, salva tutto
+  salvaCorrente = salva;
   modificheAperte = () => !!contesto?.sporco();
   if (query.get("progetto")) $("#sezione-contesto").scrollIntoView({ block: "start" });
   $("#chiudi").onclick = async () => {
