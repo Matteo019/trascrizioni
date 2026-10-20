@@ -5,7 +5,8 @@ Flusso audio:
   App (Teams) -> "CABLE Input" (VB-CABLE, dispositivo di riproduzione predefinito)
              -> "CABLE Output" letto da questo script
              -> rimandato alle cuffie scelte (così continui a sentire)
-             -> Groq Whisper (trascrizione) -> NVIDIA Nemotron (riassunto .md)
+             -> Groq Whisper (trascrizione) -> trascrizioni/trascrizione_X.txt
+I riassunti li fa riassunto.py, da avviare separatamente.
 
 Uso:
   python trascrittore.py
@@ -24,7 +25,6 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 from groq import Groq
-from openai import OpenAI
 
 BASE_DIR = Path(__file__).parent
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -47,13 +47,18 @@ load_dotenv(BASE_DIR / ".env")
 # Configurazione
 # ---------------------------------------------------------------------------
 
-CHUNK_SECONDS = 20          # 20s -> ~1600 richieste in 9 ore (limite free Groq: 2000/giorno)
-SUMMARY_EVERY_CHUNKS = 45   # ~15 minuti
+# Blocchi tagliati nelle pause: dopo MIN_CHUNK_SECONDS si taglia alla prima pausa di PAUSE_SECONDS;
+# se nessuno si ferma, a MAX_CHUNK_SECONDS si taglia nel punto più silenzioso e il resto passa al blocco dopo.
+# ~45-60s -> ~600 richieste in 9 ore (limite free Groq: 2000/giorno)
+MIN_CHUNK_SECONDS = 45
+MAX_CHUNK_SECONDS = 60
+PAUSE_SECONDS = 0.4
 SAMPLE_RATE = 48000
+BLOCK = 1024
 WHISPER_RATE = 16000
 SILENCE_RMS = 300
+PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
 LANGUAGE = "it"
-NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 CAPTURE_DEVICE_HINT = os.environ.get("CAPTURE_DEVICE", "CABLE Output")
 MONITOR_DEVICE_HINT = os.environ.get("MONITOR_DEVICE", "")
 
@@ -68,10 +73,10 @@ OUT_DIR = BASE_DIR / "trascrizioni"
 OUT_DIR.mkdir(exist_ok=True)
 SESSION_NAME = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
-SUMMARY_PATH = OUT_DIR / f"riassunto_{SESSION_NAME}.md"
+FAILED_DIR = OUT_DIR / "da_ritrascrivere"
+GLOSSARIO_PATH = BASE_DIR / "glossario.txt"
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 
 audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
 stop_event = threading.Event()
@@ -161,19 +166,39 @@ def open_monitor_stream(idx):
 # Cattura + ascolto
 # ---------------------------------------------------------------------------
 
+def block_rms(data: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(data.astype(np.float32) ** 2))) if data.size else 0.0
+
+
+def find_cut(rms: list, min_blocks: int) -> int:
+    """Indice del punto più silenzioso (media mobile ~0.2s) tra MIN e la fine del buffer."""
+    window = max(1, int(0.2 * SAMPLE_RATE / BLOCK))
+    values = np.convolve(np.array(rms), np.ones(window) / window, mode="same")
+    return min_blocks + int(np.argmin(values[min_blocks:]))
+
+
 def capture_audio(capture_idx: int, monitor_idx):
-    samples_per_chunk = SAMPLE_RATE * CHUNK_SECONDS
     monitor = open_monitor_stream(monitor_idx)
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
-    buffer = []
-    collected = 0
+    block_seconds = BLOCK / SAMPLE_RATE
+    min_blocks = int(MIN_CHUNK_SECONDS / block_seconds)
+    max_blocks = int(MAX_CHUNK_SECONDS / block_seconds)
+    pause_blocks = int(PAUSE_SECONDS / block_seconds)
+    blocks, rms = [], []
+    quiet_run = 0
+
+    def emit(cut: int):
+        nonlocal blocks, rms
+        start = datetime.datetime.now() - datetime.timedelta(seconds=len(blocks) * block_seconds)
+        audio_queue.put((np.concatenate(blocks[:cut]), start))
+        blocks, rms = blocks[cut:], rms[cut:]
 
     # WDM-KS supporta solo la modalità a callback
     def on_audio(indata, frames, time_info, status):
         raw.put(indata.copy())
 
     with sd.InputStream(device=capture_idx, samplerate=SAMPLE_RATE, channels=2,
-                        dtype="int16", blocksize=1024, callback=on_audio):
+                        dtype="int16", blocksize=BLOCK, callback=on_audio):
         while not stop_event.is_set():
             try:
                 data = raw.get(timeout=0.5)
@@ -184,14 +209,22 @@ def capture_audio(capture_idx: int, monitor_idx):
                     monitor.write(data)
                 except Exception:
                     pass
-            buffer.append(data.copy())
-            collected += len(data)
-            if collected >= samples_per_chunk:
-                audio_queue.put(np.concatenate(buffer))
-                buffer, collected = [], 0
+            blocks.append(data)
+            rms.append(block_rms(data))
 
-    if buffer:
-        audio_queue.put(np.concatenate(buffer))
+            # pausa = volume molto sotto il livello medio del parlato di questo blocco
+            threshold = max(SILENCE_RMS, 0.2 * float(np.mean(rms)))
+            quiet_run = quiet_run + 1 if rms[-1] < threshold else 0
+
+            if len(blocks) >= min_blocks and quiet_run >= pause_blocks:
+                emit(len(blocks) - quiet_run // 2)
+                quiet_run = 0
+            elif len(blocks) >= max_blocks:
+                emit(find_cut(rms, min_blocks))
+                quiet_run = 0
+
+    if blocks:
+        emit(len(blocks))
     if monitor is not None:
         monitor.stop()
         monitor.close()
@@ -222,11 +255,28 @@ def is_silent(stereo: np.ndarray) -> bool:
     return rms < SILENCE_RMS
 
 
-def transcribe_chunk(groq_client: Groq, stereo: np.ndarray) -> str:
-    if is_silent(stereo):
+def load_glossary() -> str:
+    """Termini tecnici da glossario.txt (uno per riga o separati da virgola), riletti a ogni blocco."""
+    if not GLOSSARIO_PATH.exists():
         return ""
-    wav_bytes = to_whisper_wav(stereo)
-    for attempt in range(4):
+    terms = []
+    for line in GLOSSARIO_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            terms.extend(t.strip() for t in line.split(",") if t.strip())
+    return ", ".join(terms)
+
+
+def build_prompt(previous_text: str) -> str:
+    # Whisper usa al massimo ~224 token di prompt: glossario + fine del blocco precedente
+    glossary = load_glossary()[:500]
+    tail = previous_text[-PROMPT_TAIL_CHARS:]
+    return " ".join(p for p in (f"Termini: {glossary}." if glossary else "", tail) if p)
+
+
+def transcribe_wav(groq_client: Groq, wav_bytes: bytes, prompt: str, attempts: int):
+    """Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq non risponde."""
+    for attempt in range(attempts):
         try:
             result = groq_client.audio.transcriptions.create(
                 file=("chunk.wav", wav_bytes),
@@ -234,56 +284,55 @@ def transcribe_chunk(groq_client: Groq, stereo: np.ndarray) -> str:
                 language=LANGUAGE,
                 response_format="text",
                 temperature=0.0,
+                prompt=prompt or None,
             )
             text = str(result).strip()
-            return "" if text.lower() in HALLUCINATIONS else text
+            if text.lower() in HALLUCINATIONS or (prompt and text in prompt):
+                return ""
+            return text
         except Exception as exc:
-            wait = 5 * (attempt + 1)
-            print(f"[ERRORE Groq] {exc} - riprovo tra {wait}s")
-            time.sleep(wait)
-    return ""
+            if attempt + 1 < attempts:
+                wait = 5 * (attempt + 1)
+                print(f"[ERRORE Groq] {exc} - riprovo tra {wait}s")
+                time.sleep(wait)
+            else:
+                print(f"[ERRORE Groq] {exc}")
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Riassunto (NVIDIA Nemotron)
+# Blocchi non trascritti: salvati su disco e recuperati appena Groq risponde
 # ---------------------------------------------------------------------------
 
-def summarize(client, text: str) -> str:
-    try:
-        response = client.chat.completions.create(
-            model=NEMOTRON_MODEL,
-            messages=[
-                {"role": "system", "content": "detailed thinking off"},
-                {
-                    "role": "user",
-                    "content": (
-                        "Riassumi in italiano questa parte di trascrizione di una riunione. "
-                        "Rispondi SOLO in Markdown con questa struttura:\n"
-                        "## Punti chiave\n- ...\n\n## Decisioni prese\n- ...\n\n"
-                        "## Action item\n- [ ] responsabile: compito\n\n"
-                        "Se una sezione è vuota scrivi '- Nessuno'. Sii conciso.\n\n"
-                        f"Trascrizione:\n{text}"
-                    ),
-                },
-            ],
-            temperature=0.3,
-            max_tokens=1500,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as exc:
-        print(f"[ERRORE Nemotron] {exc}")
-        return ""
+def save_failed(wav_bytes: bytes, start: datetime.datetime) -> Path:
+    FAILED_DIR.mkdir(exist_ok=True)
+    path = FAILED_DIR / f"{SESSION_NAME}__{start:%H%M%S}.wav"
+    path.write_bytes(wav_bytes)
+    return path
 
 
-def write_summary(client, pending: list, title: str):
-    if client is None or not pending:
+def retry_failed(groq_client: Groq, transcript=None):
+    """
+    Ritrascrive i file in da_ritrascrivere/. Quelli di questa sessione finiscono nel file aperto,
+    quelli di sessioni precedenti in coda alla loro trascrizione (riassunto.py li vedrà come testo nuovo).
+    """
+    if not FAILED_DIR.exists():
         return
-    print(f"\n[INFO] Genero riassunto ({title})...")
-    summary = summarize(client, " ".join(pending))
-    if summary:
-        with open(SUMMARY_PATH, "a", encoding="utf-8") as f:
-            f.write(f"\n# {title}\n\n{summary}\n")
-        print(summary + "\n")
+    for path in sorted(FAILED_DIR.glob("*.wav")):
+        session, _, hhmmss = path.stem.partition("__")
+        text = transcribe_wav(groq_client, path.read_bytes(), "", attempts=1)
+        if text is None:
+            return
+        if text:
+            line = f"[{hhmmss[:2]}:{hhmmss[2:4]}:{hhmmss[4:6]} recuperato] {text}\n"
+            if session == SESSION_NAME and transcript is not None:
+                transcript.write(line)
+                transcript.flush()
+            else:
+                with open(OUT_DIR / f"trascrizione_{session}.txt", "a", encoding="utf-8") as f:
+                    f.write(line)
+            print(line.rstrip())
+        path.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -295,11 +344,7 @@ def main():
         sys.exit("Manca GROQ_API_KEY: copia .env.example in .env e inserisci la tua chiave.")
 
     groq_client = Groq(api_key=GROQ_API_KEY)
-    nemotron_client = None
-    if NVIDIA_API_KEY:
-        nemotron_client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=NVIDIA_API_KEY)
-    else:
-        print("[WARN] NVIDIA_API_KEY non impostata: solo trascrizione, nessun riassunto.")
+    retry_failed(groq_client)
 
     capture_idx = find_capture_device()
     monitor_idx = choose_monitor_device()
@@ -307,37 +352,41 @@ def main():
     if monitor_idx is not None:
         print(f"[AUDIO] Ascolto su: {sd.query_devices(monitor_idx)['name']}")
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
-    print(f"[INFO] Riassunto:    {SUMMARY_PATH}")
-    print("[INFO] Premi CTRL+C per fermare.\n")
+    print("[INFO] Per i riassunti avvia a parte riassunto.py. Premi CTRL+C per fermare.\n")
 
     threading.Thread(target=capture_audio, args=(capture_idx, monitor_idx), daemon=True).start()
 
-    chunk_count = 0
-    pending = []
+    previous_text = ""
     with open(TRANSCRIPT_PATH, "a", encoding="utf-8") as transcript:
         try:
             while True:
                 try:
-                    chunk = audio_queue.get(timeout=1)
+                    chunk, start = audio_queue.get(timeout=1)
                 except queue.Empty:
                     continue
-                timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-                text = transcribe_chunk(groq_client, chunk)
-                if text:
-                    line = f"[{timestamp}] {text}"
+                if is_silent(chunk):
+                    continue
+                wav_bytes = to_whisper_wav(chunk)
+                text = transcribe_wav(groq_client, wav_bytes, build_prompt(previous_text), attempts=4)
+                if text is None:
+                    path = save_failed(wav_bytes, start)
+                    line = f"[{start:%H:%M:%S}] [AUDIO NON TRASCRITTO: salvato in {path.name}, verrà recuperato]"
                     print(line)
                     transcript.write(line + "\n")
                     transcript.flush()
-                    pending.append(text)
-                chunk_count += 1
-                if chunk_count % SUMMARY_EVERY_CHUNKS == 0:
-                    write_summary(nemotron_client, pending, f"Riassunto ore {timestamp}")
-                    pending = []
+                    continue
+                if text:
+                    line = f"[{start:%H:%M:%S}] {text}"
+                    print(line)
+                    transcript.write(line + "\n")
+                    transcript.flush()
+                    previous_text = text
+                retry_failed(groq_client, transcript)
         except KeyboardInterrupt:
-            print("\n[INFO] Fermato. Genero riassunto finale...")
             stop_event.set()
-            write_summary(nemotron_client, pending, "Riassunto finale")
-            print(f"[INFO] Trascrizione salvata in: {TRANSCRIPT_PATH}")
+            print(f"\n[INFO] Fermato. Trascrizione salvata in: {TRANSCRIPT_PATH}")
+            if FAILED_DIR.exists() and any(FAILED_DIR.glob("*.wav")):
+                print(f"[INFO] Blocchi non trascritti in {FAILED_DIR}: verranno recuperati al prossimo avvio.")
 
 
 if __name__ == "__main__":

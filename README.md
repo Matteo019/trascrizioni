@@ -41,5 +41,8 @@ I file finiscono in `trascrizioni/`:
 
 ## Note
 
-- Blocchi da 20 secondi: ~1600 richieste in 9 ore, sotto il limite gratuito di Groq (2000/giorno).
+- L'audio viene tagliato nelle pause (blocchi da 45-60 secondi): ~600 richieste in 9 ore, sotto il limite gratuito di Groq (2000/giorno).
+- `glossario.txt`: termini tecnici passati a Whisper per scriverli correttamente; modificabile anche durante la chiamata.
+- Se Groq non risponde, il blocco audio viene salvato in `trascrizioni/da_ritrascrivere/` e recuperato appena possibile (anche al riavvio successivo).
+- Riassunti: avvia a parte `riassunto.py`; il contesto per l'AI è in `contesto.txt`.
 - Su alcuni PC aziendali Windows blocca la registrazione "classica": lo script usa WDM-KS per leggere CABLE Output e aggirare il problema.

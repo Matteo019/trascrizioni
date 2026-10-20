@@ -1,0 +1,28 @@
+TIPO DI SESSIONE
+Corso di formazione su Panthera, ERP di Sisthema (gruppo Var Group). Un formatore condivide lo schermo
+e spiega ai partecipanti come usare il gestionale: menu, schermate, anagrafiche, campi, parametri,
+configurazioni e procedure operative. Non è una riunione decisionale: non esistono decisioni né action item.
+
+OBIETTIVO DEL RIASSUNTO
+Una dispensa di studio che permetta a chi non era presente di imparare TUTTO ciò che è stato spiegato,
+organizzata per argomento (es. "Anagrafica articoli", "Parametri di personalizzazione", "Server di stampa e batch").
+
+COME È FATTA LA TRASCRIZIONE
+- È generata automaticamente dal riconoscimento vocale a blocchi di 20 secondi: le frasi possono essere
+  spezzate a metà tra un blocco e l'altro, senza punteggiatura affidabile e senza indicare chi parla.
+- Contiene errori di riconoscimento, soprattutto sui termini tecnici. Correzioni frequenti:
+  "Pantera" -> Panthera; "LDAB" -> LDAP; "tenner/tenant 165" -> tenant Microsoft 365;
+  "Sistema" (azienda) -> Sisthema. Se un termine è chiaramente sbagliato ma il senso è evidente, correggilo.
+- Parla soprattutto il formatore; a volte i partecipanti fanno domande.
+
+COSA È RUMORE (da NON ignorare: va SEGNALATO e INTERPRETATO)
+- Frasi di servizio: "mi sentite?", "vedete lo schermo?", "un attimo che condivido", saluti, pause caffè.
+- Chiacchiere, battute, commenti personali, discorsi non legati all'uso del gestionale.
+- Frasi senza senso, ripetizioni, frammenti incomprensibili, allucinazioni del riconoscimento vocale
+  (es. "Grazie.", "Sottotitoli a cura di...", frasi in altre lingue senza contesto).
+- Rumori di fondo trascritti o conversazioni di altre persone non pertinenti al corso.
+Il rumore non va mescolato ai contenuti didattici, ma va riportato a parte indicando: l'orario,
+cosa è stato trascritto e cosa probabilmente è stato detto davvero (o "non interpretabile").
+Se un passaggio tecnico è poco chiaro, va tenuto nella sua sezione e marcato come [INCERTO]
+con la tua interpretazione più probabile.
+Nel dubbio se un contenuto è tecnico e pertinente al gestionale, tienilo.
