@@ -1219,7 +1219,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
         <div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
         <div class="msg-corpo">
           <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}</div>
-          <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · ${esc(m.modello)} · ${m.secondi}s` : ""}${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} lento` : ""}</div>
+          <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · Ha risposto <strong>${esc(m.modello)}</strong> in ${m.secondi} s` : ""}${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} non ha risposto, saltato` : ""}</div>
         </div>
       </div>`;
 
@@ -1263,8 +1263,18 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     aggiungi(msgUtente);
     // "sta scrivendo…": tre puntini come nelle chat online
     lista.insertAdjacentHTML("beforeend", `<div class="msg assistente digitando"><div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
-      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo">Cerco nei tuoi documenti…</span></div></div>`);
+      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo stato-attesa">Cerco nei tuoi documenti…</span></div></div>`);
     const digitando = lista.lastElementChild;
+    // attesa visibile: secondi che passano e cosa sta succedendo (il modello lento viene saltato da solo)
+    const partenza = Date.now();
+    const contatore = setInterval(() => {
+      const s = Math.round((Date.now() - partenza) / 1000);
+      const el = digitando.querySelector(".stato-attesa");
+      if (!el) return clearInterval(contatore);
+      el.textContent = s < 15 ? `Cerco nei tuoi documenti… ${s} s`
+        : s < 40 ? `Il modello ci sta mettendo un po'… ${s} s`
+        : `Il modello non risponde: provo con un altro… ${s} s`;
+    }, 1000);
     window.effetti?.messaggio(digitando);
     lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
     let risposta;
@@ -1274,6 +1284,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     } catch (e) {
       risposta = { ruolo: "assistente", testo: e.message, errore: true, ora: new Date().toISOString() };
     }
+    clearInterval(contatore);
     storico.push(risposta);
     memorizza();
     occupato = false;
@@ -1298,7 +1309,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     const info = q(".modello-info");
     if (!info) return;
     const m = catalogo.modelli.find(x => x.id === modello);
-    info.innerHTML = `${m.punti.map(p => `<span class="tag successo">${esc(p)}</span>`).join("")} <span>${esc(m.descrizione)}</span>`;
+    info.innerHTML = m.punti.map(p => `<span class="tag successo">${esc(p)}</span>`).join("");
   };
   q(".scelta-modello").onchange = e => { modello = e.target.value; memoria("chat-modello", modello); descriviModello(); };
   descriviModello();

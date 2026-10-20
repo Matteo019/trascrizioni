@@ -1257,3 +1257,6 @@ body.home .header { display: none; }
 /* in diretta: avviso quando l'audio non arriva */
 .b-avviso { flex: 0 0 auto; padding: 8px 12px; border-radius: var(--radius-1); font-size: 13px; line-height: 1.4;
   background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
+
+/* chat come una chat normale: la card stessa è una colonna centrale, con sfondo libero ai lati */
+.chat-pagina { width: min(960px, 100%); margin-left: auto; margin-right: auto; }

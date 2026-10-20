@@ -119,7 +119,10 @@ class Processo:
         else:
             vivo = self.pid is not None and pid_vivo(self.pid)
         if not vivo:
-            self.pid_file.unlink(missing_ok=True)
+            try:
+                self.pid_file.unlink(missing_ok=True)
+            except OSError:              # file appena riscritto da un avvio in corso: ci si riprova dopo
+                pass
         return vivo
 
     def ferma(self, subito: bool):

@@ -33,6 +33,7 @@ MAX_SEZIONI = 8
 MAX_CARATTERI_SEZIONE = 3000
 # un modello gratuito che non risponde in 40 s di solito è fermo: si passa al successivo
 TIMEOUT_SECONDI = 40
+TEMPO_MASSIMO_SECONDI = 100   # oltre questo non si provano altri modelli: meglio un errore chiaro che un'attesa infinita
 TIMEOUT_PROVA_SECONDI = 25
 DURATA_STATO_SECONDI = 180
 _stato_modelli = {"quando": 0.0, "stato": {}}
@@ -232,21 +233,33 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
     # prima il modello scelto, poi gli altri: se uno dei gratuiti è fermo risponde il successivo
     ordine = [modello] + [m["id"] for m in MODELLI if m["id"] != modello]
     nomi = {m["id"]: m["nome"] for m in MODELLI}
-    saltati = []
+    saltati, motivi = [], []
+    avvio = time.time()
     for prova in ordine:
+        rimasti = TEMPO_MASSIMO_SECONDI - (time.time() - avvio)
+        if rimasti < 10:
+            break
         inizio = time.time()
         try:
-            r = client.chat.completions.create(model=prova, messages=messaggi, temperature=0.2, max_tokens=3000)
+            r = client.with_options(timeout=min(TIMEOUT_SECONDI, rimasti)).chat.completions.create(
+                model=prova, messages=messaggi, temperature=0.2, max_tokens=3000)
             testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
-        except Exception:
+            motivo = "risposta vuota"
+        except Exception as exc:
             testo = ""
+            motivo = f"{type(exc).__name__}: {str(exc)[:120]}"
+        if not testo:
+            # finisce nel log della dashboard: si vede quale modello è fermo e perché
+            print(f"[CHAT] {prova} non ha risposto in {time.time() - inizio:.0f}s ({motivo})", flush=True)
+            motivi.append(f"{nomi[prova]}: {motivo}")
         if testo:
             _stato_modelli["stato"][prova] = True
             return {"risposta": testo, "fonti": elenco_fonti, "modello": prova, "nome_modello": nomi[prova],
                     "secondi": round(time.time() - inizio), "saltati": saltati}
         _stato_modelli["stato"][prova] = False
         saltati.append(nomi[prova])
-    raise RuntimeError("Nessun modello NVIDIA ha risposto (" + ", ".join(saltati) + "). Riprova tra poco.")
+    raise RuntimeError(f"Nessun modello NVIDIA ha risposto in {time.time() - avvio:.0f} s. Riprova tra poco. "
+                       "Dettagli: " + "; ".join(motivi))
 
 
 def stato_modelli() -> dict:
