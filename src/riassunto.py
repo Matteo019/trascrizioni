@@ -6,7 +6,8 @@ Cartelle (dentro trascrizioni/):
   storico/trascrizione_X.txt  parte della trascrizione già riassunta (fa da segnalibro:
                               alla ripartenza si riprende esattamente da lì, senza perdere nulla)
   riassunti/appunti_X.md      appunti dettagliati blocco per blocco (solo aggiunte, mai riscritti)
-  riassunti/riassunto_X.md    riassunto finale per argomento, rigenerato dagli appunti
+  riassunti/parti_X/          riassunto di ogni parte (~1-1.5 ore) + titolo.txt (modificabile)
+  riassunti/Riassunto AAAA-MM-GG HH.MM - <titolo>.md   documento finale: indice + tutte le parti
 
 Uso (dalla cartella del progetto):
   python src/riassunto.py               controlla ogni INTERVALLO minuti finché non premi CTRL+C
@@ -183,17 +184,42 @@ def orari_parte(blocchi_parte: list):
     return (orari[0], orari[-1]) if orari else ("?", "?")
 
 
+PROMPT_TITOLO = """Questo è l'indice degli argomenti di una sessione di formazione.
+Scrivi un titolo breve e parlante (massimo 8 parole) che descriva la sessione, da usare come nome di file.
+Rispondi solo con il titolo, senza virgolette e senza punto finale.
+
+Indice:
+{indice}"""
+
+
+def titolo_sessione(client: OpenAI, cartella_parti: Path, indice: str) -> str:
+    """Generato una sola volta e salvato in titolo.txt (modificabile a mano): il nome del file resta stabile."""
+    file_titolo = cartella_parti / "titolo.txt"
+    if file_titolo.exists() and file_titolo.read_text(encoding="utf-8").strip():
+        titolo = file_titolo.read_text(encoding="utf-8").strip()
+    else:
+        titolo = llm(client, PROMPT_TITOLO.format(indice=indice), 2000).splitlines()[0]
+        file_titolo.write_text(titolo + "\n", encoding="utf-8")
+    titolo = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", titolo).strip(" .")
+    return re.sub(r"\s+", " ", titolo)[:80] or "Sessione"
+
+
+def prefisso_file(nome: str) -> str:
+    """'20261020_094750' -> 'Riassunto 2026-10-20 09.47'"""
+    data = datetime.datetime.strptime(nome, "%Y%m%d_%H%M%S")
+    return f"Riassunto {data:%Y-%m-%d %H.%M}"
+
+
 def aggiorna_riassunto(client: OpenAI, nome: str):
-    """Rigenera solo le parti i cui appunti sono cambiati, poi ricompone riassunto_X.md."""
+    """Rigenera solo le parti i cui appunti sono cambiati, poi ricompone il riassunto."""
     appunti = RIASSUNTI_DIR / f"appunti_{nome}.md"
-    riassunto = RIASSUNTI_DIR / f"riassunto_{nome}.md"
     cartella_parti = RIASSUNTI_DIR / f"parti_{nome}"
     if not appunti.exists():
         return
     cartella_parti.mkdir(exist_ok=True)
 
     parti = parti_da_appunti(appunti.read_text(encoding="utf-8"))
-    cambiato = not riassunto.exists()
+    cambiato = False
     testi_parti = []
     for numero, blocchi_parte in enumerate(parti, start=1):
         sorgente = "\n".join(blocchi_parte)
@@ -211,16 +237,27 @@ def aggiorna_riassunto(client: OpenAI, nome: str):
             cambiato = True
         testi_parti.append((numero, inizio, fine, corpo.strip()))
 
-    if not cambiato:
-        return
-
-    indice = ["# Riassunto della sessione", "", "## Indice", ""]
+    indice = []
     for numero, inizio, fine, corpo in testi_parti:
         indice.append(f"- **Parte {numero} ({inizio}-{fine})**")
-        for titolo in re.findall(r"^### (.+)$", corpo, flags=re.M):
-            indice.append(f"  - {titolo.strip()}")
+        for argomento in re.findall(r"^### (.+)$", corpo, flags=re.M):
+            indice.append(f"  - {argomento.strip()}")
+
+    titolo = titolo_sessione(client, cartella_parti, "\n".join(indice))
+    prefisso = prefisso_file(nome)
+    riassunto = RIASSUNTI_DIR / f"{prefisso} - {titolo}.md"
+    # vecchi nomi della stessa sessione (es. titolo cambiato a mano, o formato riassunto_X.md)
+    for vecchio in [*RIASSUNTI_DIR.glob(f"{prefisso} - *.md"), RIASSUNTI_DIR / f"riassunto_{nome}.md"]:
+        if vecchio.exists() and vecchio != riassunto:
+            vecchio.unlink()
+            cambiato = True
+    if not cambiato and riassunto.exists():
+        return
+
+    data = datetime.datetime.strptime(nome, "%Y%m%d_%H%M%S")
+    testa = [f"# {titolo}", "", f"*Sessione del {data:%d/%m/%Y}, iniziata alle {data:%H:%M}*", "", "## Indice", ""]
     sezioni = [f"## Parte {numero} ({inizio}-{fine})\n\n{corpo}" for numero, inizio, fine, corpo in testi_parti]
-    scrivi_atomico(riassunto, "\n".join(indice) + "\n\n---\n\n" + "\n\n---\n\n".join(sezioni) + "\n")
+    scrivi_atomico(riassunto, "\n".join(testa + indice) + "\n\n---\n\n" + "\n\n---\n\n".join(sezioni) + "\n")
     print(f"[{ora()}] Fatto: {riassunto}")
 
 
