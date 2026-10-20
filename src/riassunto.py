@@ -8,9 +8,9 @@ Cartelle (dentro trascrizioni/):
   riassunti/appunti_X.md      appunti dettagliati blocco per blocco (solo aggiunte, mai riscritti)
   riassunti/riassunto_X.md    riassunto finale per argomento, rigenerato dagli appunti
 
-Uso:
-  python riassunto.py          controlla ogni INTERVALLO minuti finché non premi CTRL+C
-  python riassunto.py --una-volta   elabora quello che c'è ed esce
+Uso (dalla cartella del progetto):
+  python src/riassunto.py               controlla ogni INTERVALLO minuti finché non premi CTRL+C
+  python src/riassunto.py --una-volta   elabora quello che c'è ed esce
 """
 
 import os
@@ -22,22 +22,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-BASE_DIR = Path(__file__).parent
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def load_dotenv(path: Path):
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-load_dotenv(BASE_DIR / ".env")
+from comune import CONFIG_DIR, TRASCRIZIONI_DIR
 
 INTERVALLO_MINUTI = float(os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", "10"))
 MIN_NUOVI_CARATTERI = 1500          # sotto questa soglia aspetta altro testo
@@ -49,7 +34,7 @@ MODELLI = [m.strip() for m in os.environ.get(
     "nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/nemotron-3-super-120b-a12b",
 ).split(",") if m.strip()]
 
-CONTESTO_FILE = BASE_DIR / "contesto.txt"
+CONTESTO_FILE = CONFIG_DIR / "contesto.txt"
 
 
 def contesto() -> str:
@@ -66,7 +51,6 @@ Scrivi sempre in italiano, in Markdown. Non inventi mai informazioni che non son
 CONTESTO DELLA SESSIONE:
 {contesto}"""
 
-TRASCRIZIONI_DIR = BASE_DIR / "trascrizioni"
 STORICO_DIR = TRASCRIZIONI_DIR / "storico"
 RIASSUNTI_DIR = TRASCRIZIONI_DIR / "riassunti"
 

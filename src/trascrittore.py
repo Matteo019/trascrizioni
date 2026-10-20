@@ -8,8 +8,8 @@ Flusso audio:
              -> Groq Whisper (trascrizione) -> trascrizioni/trascrizione_X.txt
 I riassunti li fa riassunto.py, da avviare separatamente.
 
-Uso:
-  python trascrittore.py
+Uso (dalla cartella del progetto):
+  python src/trascrittore.py
 """
 
 import os
@@ -26,22 +26,7 @@ import numpy as np
 import sounddevice as sd
 from groq import Groq
 
-BASE_DIR = Path(__file__).parent
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def load_dotenv(path: Path):
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-load_dotenv(BASE_DIR / ".env")
+from comune import CONFIG_DIR, TRASCRIZIONI_DIR
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -59,6 +44,10 @@ WHISPER_RATE = 16000
 SILENCE_RMS = 300
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
 LANGUAGE = "it"
+# large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
+# quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
+WHISPER_MODELS = [m.strip() for m in os.environ.get(
+    "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()]
 CAPTURE_DEVICE_HINT = os.environ.get("CAPTURE_DEVICE", "CABLE Output")
 MONITOR_DEVICE_HINT = os.environ.get("MONITOR_DEVICE", "")
 
@@ -69,12 +58,12 @@ HALLUCINATIONS = {
     "...", "",
 }
 
-OUT_DIR = BASE_DIR / "trascrizioni"
+OUT_DIR = TRASCRIZIONI_DIR
 OUT_DIR.mkdir(exist_ok=True)
 SESSION_NAME = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
 FAILED_DIR = OUT_DIR / "da_ritrascrivere"
-GLOSSARIO_PATH = BASE_DIR / "glossario.txt"
+GLOSSARIO_PATH = CONFIG_DIR / "glossario.txt"
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
@@ -275,28 +264,31 @@ def build_prompt(previous_text: str) -> str:
 
 
 def transcribe_wav(groq_client: Groq, wav_bytes: bytes, prompt: str, attempts: int):
-    """Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq non risponde."""
+    """
+    Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq non risponde.
+    A ogni tentativo prova i modelli in ordine: se il primo fallisce passa subito al successivo.
+    """
     for attempt in range(attempts):
-        try:
-            result = groq_client.audio.transcriptions.create(
-                file=("chunk.wav", wav_bytes),
-                model="whisper-large-v3-turbo",
-                language=LANGUAGE,
-                response_format="text",
-                temperature=0.0,
-                prompt=prompt or None,
-            )
-            text = str(result).strip()
-            if text.lower() in HALLUCINATIONS or (prompt and text in prompt):
-                return ""
-            return text
-        except Exception as exc:
-            if attempt + 1 < attempts:
-                wait = 5 * (attempt + 1)
-                print(f"[ERRORE Groq] {exc} - riprovo tra {wait}s")
-                time.sleep(wait)
-            else:
-                print(f"[ERRORE Groq] {exc}")
+        for model in WHISPER_MODELS:
+            try:
+                result = groq_client.audio.transcriptions.create(
+                    file=("chunk.wav", wav_bytes),
+                    model=model,
+                    language=LANGUAGE,
+                    response_format="text",
+                    temperature=0.0,
+                    prompt=prompt or None,
+                )
+                text = str(result).strip()
+                if text.lower() in HALLUCINATIONS or (prompt and text in prompt):
+                    return ""
+                return text
+            except Exception as exc:
+                print(f"[ERRORE Groq] {model}: {str(exc)[:200]}")
+        if attempt + 1 < attempts:
+            wait = 5 * (attempt + 1)
+            print(f"[INFO] Nessun modello Whisper disponibile, riprovo tra {wait}s")
+            time.sleep(wait)
     return None
 
 
