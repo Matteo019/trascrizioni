@@ -4,9 +4,10 @@ Riassunto didattico delle trascrizioni, indipendente da trascrittore.py.
 Cartelle (dentro trascrizioni/):
   trascrizione_X.txt          scritta in tempo reale da trascrittore.py
   storico/trascrizione_X.txt  parte della trascrizione già riassunta (fa da segnalibro:
-                              alla ripartenza si riprende esattamente da lì, senza perdere nulla)
-  riassunti/appunti_X.md      appunti dettagliati blocco per blocco (solo aggiunte, mai riscritti)
-  riassunti/parti_X/          riassunto di ogni parte (~1-1.5 ore) + titolo.txt (modificabile)
+                              alla ripartenza si riprende esattamente da lì, senza perdere nulla);
+                              a sessione finita e riassunta, l'originale viene spostato qui
+  storico/Appunti AAAA-MM-GG HH.MM.md     appunti dettagliati blocco per blocco (solo aggiunte, mai riscritti)
+  riassunti/Parti AAAA-MM-GG HH.MM/       "Parte NN.md" per ogni ~1-1.5 ore + titolo.txt (modificabile)
   riassunti/Riassunto AAAA-MM-GG HH.MM - <titolo>.md   documento finale: indice + tutte le parti
 
 Uso (dalla cartella del progetto):
@@ -17,6 +18,7 @@ Uso (dalla cartella del progetto):
 import os
 import re
 import hashlib
+import filecmp
 import sys
 import time
 import datetime
@@ -204,16 +206,44 @@ def titolo_sessione(client: OpenAI, cartella_parti: Path, indice: str) -> str:
     return re.sub(r"\s+", " ", titolo)[:80] or "Sessione"
 
 
+def etichetta(nome: str) -> str:
+    """'20261020_094750' -> '2026-10-20 09.47'"""
+    return f"{datetime.datetime.strptime(nome, '%Y%m%d_%H%M%S'):%Y-%m-%d %H.%M}"
+
+
 def prefisso_file(nome: str) -> str:
-    """'20261020_094750' -> 'Riassunto 2026-10-20 09.47'"""
-    data = datetime.datetime.strptime(nome, "%Y%m%d_%H%M%S")
-    return f"Riassunto {data:%Y-%m-%d %H.%M}"
+    return f"Riassunto {etichetta(nome)}"
+
+
+def file_appunti(nome: str) -> Path:
+    # dati di lavoro: stanno in storico/, in riassunti/ restano solo riassunto e parti
+    return STORICO_DIR / f"Appunti {etichetta(nome)}.md"
+
+
+def cartella_parti_di(nome: str) -> Path:
+    return RIASSUNTI_DIR / f"Parti {etichetta(nome)}"
+
+
+def migra_nomi_vecchi(nome: str):
+    """Sposta/rinomina i file creati con i nomi e le posizioni precedenti."""
+    for vecchi_appunti in (RIASSUNTI_DIR / f"appunti_{nome}.md", RIASSUNTI_DIR / f"Appunti {etichetta(nome)}.md"):
+        if vecchi_appunti.exists() and not file_appunti(nome).exists():
+            vecchi_appunti.rename(file_appunti(nome))
+    vecchie_parti = RIASSUNTI_DIR / f"parti_{nome}"
+    if vecchie_parti.exists() and not cartella_parti_di(nome).exists():
+        vecchie_parti.rename(cartella_parti_di(nome))
+    cartella = cartella_parti_di(nome)
+    if cartella.exists():
+        for vecchia in cartella.glob("parte_*.md"):
+            nuova = cartella / vecchia.name.replace("parte_", "Parte ")
+            if not nuova.exists():
+                vecchia.rename(nuova)
 
 
 def aggiorna_riassunto(client: OpenAI, nome: str):
     """Rigenera solo le parti i cui appunti sono cambiati, poi ricompone il riassunto."""
-    appunti = RIASSUNTI_DIR / f"appunti_{nome}.md"
-    cartella_parti = RIASSUNTI_DIR / f"parti_{nome}"
+    appunti = file_appunti(nome)
+    cartella_parti = cartella_parti_di(nome)
     if not appunti.exists():
         return
     cartella_parti.mkdir(exist_ok=True)
@@ -224,7 +254,7 @@ def aggiorna_riassunto(client: OpenAI, nome: str):
     for numero, blocchi_parte in enumerate(parti, start=1):
         sorgente = "\n".join(blocchi_parte)
         impronta = hashlib.sha256(sorgente.encode("utf-8")).hexdigest()[:16]
-        file_parte = cartella_parti / f"parte_{numero:02d}.md"
+        file_parte = cartella_parti / f"Parte {numero:02d}.md"
         inizio, fine = orari_parte(blocchi_parte)
         intestazione = f"<!-- appunti: {impronta} -->\n"
 
@@ -264,7 +294,8 @@ def aggiorna_riassunto(client: OpenAI, nome: str):
 def elabora(client: OpenAI, trascrizione: Path, forza: bool):
     nome = trascrizione.stem.removeprefix("trascrizione_")
     storico = STORICO_DIR / trascrizione.name
-    appunti = RIASSUNTI_DIR / f"appunti_{nome}.md"
+    migra_nomi_vecchi(nome)
+    appunti = file_appunti(nome)
 
     gia_fatto = storico.stat().st_size if storico.exists() else 0
     with open(trascrizione, "rb") as f:
@@ -285,6 +316,25 @@ def elabora(client: OpenAI, trascrizione: Path, forza: bool):
                 f.write(blocco.encode("utf-8"))
 
     aggiorna_riassunto(client, nome)
+    archivia_se_finita(trascrizione, storico)
+
+
+def archivia_se_finita(trascrizione: Path, storico: Path):
+    """
+    Una trascrizione riassunta per intero e non più in scrittura viene spostata in storico/
+    (al posto della copia identica). Windows non permette di spostare un file che trascrittore.py
+    tiene ancora aperto: in quel caso si riprova al giro successivo.
+    """
+    try:
+        if trascrizione.stat().st_size == 0:
+            trascrizione.unlink()
+            print(f"[{ora()}] Eliminata trascrizione vuota {trascrizione.name}")
+            return
+        if storico.exists() and filecmp.cmp(trascrizione, storico, shallow=False):
+            os.replace(trascrizione, storico)
+            print(f"[{ora()}] Trascrizione completa archiviata in {storico}")
+    except PermissionError:
+        pass
 
 
 def ciclo(client: OpenAI, forza: bool):
