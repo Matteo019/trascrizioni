@@ -138,8 +138,22 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--ink-500); bor
   box-shadow: var(--elev-panel); overflow: hidden;
 }
 .pannello-corpo { padding: var(--sp-5); }
-.pannello-piede { display: flex; gap: var(--sp-3); align-items: center; justify-content: center; flex-wrap: wrap; padding: var(--sp-4) var(--sp-5); position: relative; }
+.pannello-piede { display: flex; gap: var(--sp-3); align-items: center; justify-content: space-between; flex-wrap: wrap; padding: var(--sp-4) var(--sp-5); position: relative; }
 .pannello-piede::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: var(--ombra-sopra); pointer-events: none; }
+.piede-sx { display: flex; align-items: center; }
+.piede-dx { display: flex; gap: var(--sp-3); align-items: center; flex-wrap: wrap; }
+.switch-schede {
+  display: inline-flex; background: var(--surface-2); border-radius: var(--pill); padding: 3px; gap: 2px;
+}
+.switch-schede a {
+  padding: 6px 14px; border-radius: var(--pill); font-size: 13px; font-weight: 600;
+  color: var(--ink-500); background: transparent; text-decoration: none;
+  transition: background .2s, color .2s, box-shadow .2s;
+}
+.switch-schede a:hover { color: var(--ink-800); }
+.switch-schede a.attivo {
+  background: var(--surface); color: var(--green); box-shadow: 0 1px 3px rgba(0,0,0,.12);
+}
 .sotto-hero { max-width: 1200px; margin: calc(var(--sp-6) * -1) auto 0; padding: 0 var(--sp-5) var(--sp-7); }
 .sezione-pagina { max-width: 1200px; margin: 0 auto; padding: var(--sp-6) var(--sp-5) var(--sp-7); }
 h2 { font-family: var(--font-titoli); font-size: 24px; font-weight: 700; color: var(--ink-900); margin: 0 0 var(--sp-4); letter-spacing: -.01em; }
@@ -601,6 +615,8 @@ dialog textarea { resize: vertical; }
 .chat-barra { padding: var(--sp-2) var(--sp-3); }
 .modello-info { padding: 6px var(--sp-3) 0; }
 .pannello-piede { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
+.piede-dx { gap: var(--sp-2); }
+.switch-schede a { padding: 5px 10px; font-size: 12px; }
 .btn.grande { height: 40px; font-size: 15px; padding: 0 var(--sp-5); }
 .pannello-corpo { padding: var(--sp-3) var(--sp-4); }
 
@@ -763,6 +779,9 @@ dialog { background: var(--vetro-forte); }
 .switch-processi { position: relative; }
 .switch-processi button { position: relative; z-index: 1; }
 .switch-processi.con-indicatore button.attivo { background: transparent; box-shadow: none; }
+.switch-schede { position: relative; }
+.switch-schede a { position: relative; z-index: 1; }
+.switch-schede.con-indicatore a.attivo { background: transparent; box-shadow: none; }
 
 /* processi attivi: pallino che pulsa con un alone */
 .vivo .punto { animation: pulsa-alone 1.8s ease-out infinite; }

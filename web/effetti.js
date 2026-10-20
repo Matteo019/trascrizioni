@@ -15,7 +15,7 @@
   /* ---------- onda al clic ---------- */
   const PREMIBILI = [
     ".btn", ".topnav a", ".tabs a", ".tabs button", ".riquadro", ".sessione-voce", ".elenco-voce",
-    ".switch-processi button", ".menu-altro-lista button", ".evento", ".giorno[data-href]", ".kcard-sessione",
+    ".switch-processi button", ".switch-schede a", ".menu-altro-lista button", ".evento", ".giorno[data-href]", ".kcard-sessione",
     ".chip", ".fonte", ".processo-testa", ".brand", "tr.cliccabile", ".risultato a", ".tile-cliccabile", ".cr-pillola",
   ].join(",");
 
@@ -49,6 +49,7 @@
     { contenitore: ".topnav", voce: "a", attiva: ".attivo", classe: "indicatore-linea" },
     { contenitore: ".tabs", voce: "a, button", attiva: ".attivo", classe: "indicatore-linea" },
     { contenitore: ".switch-processi", voce: "button", attiva: ".attivo", classe: "indicatore-pillola" },
+    { contenitore: ".switch-schede", voce: "a", attiva: ".attivo", classe: "indicatore-pillola" },
   ];
 
   function indicatori() {

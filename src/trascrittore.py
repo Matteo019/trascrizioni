@@ -20,6 +20,7 @@ import sys
 import time
 import wave
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -52,6 +53,7 @@ RIPROVA_ASCOLTO_SECONDI = 10   # cuffie che cambiano modalità o si scollegano: 
 SENZA_AUDIO_SECONDI = 5
 CUFFIE_MUTE_SECONDI = 15       # cuffie scelte che non suonano da così tanto: errore e riavvio dell'audio
 RIAVVIO_CUFFIE_OGNI = 60       # al massimo un riavvio dell'audio al minuto per colpa delle cuffie
+CONTROLLO_CUFFIE_SECONDI = 3   # ogni quanto si rilegge la scelta delle cuffie fatta nelle impostazioni
 # se dal cavo arriva solo silenzio digitale da così tanto, si controlla dove Windows manda l'audio
 SILENZIO_CAVO_SECONDI = 20
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
@@ -69,6 +71,14 @@ HALLUCINATIONS = {
     "sottotitoli creati dalla comunità amara.org", "sottotitoli a cura di qtss",
     "...", "",
 }
+
+
+
+def inventato(text: str) -> bool:
+    """Solo frasi inventate, anche ripetute (es. «Grazie a tutti. Grazie a tutti.»)."""
+    frasi = re.findall(r"[^.!?]+[.!?]*", text.lower())
+    return all(re.sub(r"[!?]+$", ".", f.strip()) in HALLUCINATIONS for f in frasi)
+
 
 PROGETTO_DIR = path_progetto(argomento_progetto())
 OUT_DIR = PROGETTO_DIR / "trascrizioni"
@@ -296,7 +306,7 @@ def riapri_dispositivi(nome_ascolto):
     capture_idx = find_capture_device()
     monitor_idx = None
     if nome_ascolto:
-        monitor_idx = next((i for i, n in dispositivi_ascolto() if n == nome_ascolto), None)
+        monitor_idx = trova_ascolto(nome_ascolto)
         if monitor_idx is None:
             print(f"[WARN] Cuffie «{nome_ascolto}» non trovate: la trascrizione continua senza ascolto.")
     return capture_idx, monitor_idx
@@ -340,10 +350,27 @@ def controlla_uscita():
                   "o altoparlante in Teams): la trascrizione riprende da sola.")
 
 
+def cuffie_cambiate(monitor: Ascolto):
+    """
+    Cuffie scelte nelle impostazioni mentre la trascrizione gira (prima non c'erano o erano altre).
+    Restituisce il nome voluto se diverso da quelle in uso, altrimenti None.
+    """
+    voluto = valore_dotenv("MONITOR_DEVICE")
+    if not voluto or (monitor.nome and voluto.lower() in monitor.nome.lower()):
+        return None
+    return voluto
+
+
+def trova_ascolto(nome: str):
+    return next((i for i, n in dispositivi_ascolto() if nome.lower() in n.lower()), None)
+
+
 def capture_audio(capture_idx: int, monitor_idx):
     global ultimo_suono
     monitor = Ascolto(monitor_idx)
     ultimo_riavvio_cuffie = 0.0
+    prossimo_controllo_cuffie = time.time() + CONTROLLO_CUFFIE_SECONDI
+    cuffie_volute = None          # scelte dopo l'avvio ma non ancora viste da PortAudio
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
     min_blocks = int(MIN_CHUNK_SECONDS / block_seconds)
@@ -368,12 +395,16 @@ def capture_audio(capture_idx: int, monitor_idx):
             # l'audio non arrivava più: si riaprono cattura e cuffie, l'audio già raccolto resta
             monitor.chiudi()
             try:
-                capture_idx, monitor_idx = riapri_dispositivi(monitor.nome if monitor.idx is not None else None)
+                capture_idx, monitor_idx = riapri_dispositivi(
+                    cuffie_volute or (monitor.nome if monitor.idx is not None else None))
             except BaseException as exc:       # anche SystemExit: cavo non trovato, si riprova
                 print(f"[ERRORE] Cattura audio non disponibile ({str(exc).splitlines()[0][:100]}): riprovo tra 3 s.")
                 stop_event.wait(3)
                 continue
             monitor = Ascolto(monitor_idx)
+            if cuffie_volute and monitor.idx is not None:
+                print(f"[AUDIO] Ascolto su: {monitor.nome}")
+            cuffie_volute = None
         try:
             stream = sd.InputStream(device=capture_idx, samplerate=SAMPLE_RATE, channels=2,
                                     dtype="int16", blocksize=BLOCK, callback=on_audio)
@@ -415,6 +446,24 @@ def capture_audio(capture_idx: int, monitor_idx):
                 elif len(blocks) >= max_blocks:
                     emit(find_cut(rms, min_blocks))
                     quiet_run = 0
+
+                # cuffie scelte nelle impostazioni a trascrizione avviata: si passa a quelle
+                if DA_DASHBOARD and time.time() >= prossimo_controllo_cuffie:
+                    prossimo_controllo_cuffie = time.time() + CONTROLLO_CUFFIE_SECONDI
+                    voluto = cuffie_cambiate(monitor)
+                    if voluto:
+                        idx = trova_ascolto(voluto)
+                        if idx is not None:
+                            monitor.chiudi()
+                            monitor = Ascolto(idx)
+                            print(f"[AUDIO] Ascolto su: {monitor.nome}")
+                        elif time.time() - ultimo_riavvio_cuffie > RIAVVIO_CUFFIE_OGNI:
+                            # collegate dopo l'avvio: serve rileggere i dispositivi
+                            ultimo_riavvio_cuffie = time.time()
+                            cuffie_volute = voluto
+                            print(f"[AUDIO] Cerco le cuffie «{voluto}» scelte nelle impostazioni.")
+                            bloccata = True
+                            break
 
                 # cuffie che non tornano da sole: Windows le ha invalidate, serve riaprire tutto l'audio
                 if monitor.serve_riavvio and time.time() - ultimo_riavvio_cuffie > RIAVVIO_CUFFIE_OGNI:
@@ -494,7 +543,7 @@ def transcribe_wav(groq_client: Groq, wav_bytes: bytes, prompt: str, attempts: i
                     prompt=prompt or None,
                 )
                 text = str(result).strip()
-                if text.lower() in HALLUCINATIONS or (prompt and text in prompt):
+                if inventato(text) or (prompt and text in prompt):
                     return ""
                 return text
             except Exception as exc:

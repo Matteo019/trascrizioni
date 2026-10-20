@@ -280,6 +280,10 @@ async function naviga() {
   document.body.classList.toggle("home", sezione === "progetti");
   $$(".topnav a").forEach(a => a.classList.toggle("attivo",
     a.dataset.nav === (sezione === "p" ? "progetti" : sezione)));
+  // il link "Progetti" nella topnav punta all'ultimo progetto aperto
+  const ultimoSlug = memoria("ultimo-progetto");
+  const navProgetti = $(".topnav a[data-nav=progetti]");
+  if (navProgetti && ultimoSlug) navProgetti.href = `#/p/${enc(ultimoSlug)}`;
 
   vista.innerHTML = '<div class="caricamento">Caricamento…</div>';
   window.scrollTo(0, 0);
@@ -462,7 +466,6 @@ async function vistaProgetti(query) {
       </header>
 
       <nav class="cr-progetti-fila" aria-label="Progetti">
-        <span class="etichetta-lato">Progetti</span>
         ${visibili.map(p => {
           const attivo = p.processi.some(x => x.attivo);
           return `<a class="cr-pillola" href="#/p/${enc(p.slug)}" title="${intero(p.sessioni)} sessioni">
@@ -686,6 +689,7 @@ async function nuovoProgetto(valori = {}) {
 const SCHEDE_SESSIONE = [["riassunto", "Riassunto"], ["trascrizione", "Trascrizione"], ["appunti", "Appunti"]];
 
 async function vistaProgetto(slug, nomeSessione, tab) {
+  memoria("ultimo-progetto", slug);
   const p = await api(`/api/progetti/${enc(slug)}`);
   const sessioni = p.elenco_sessioni;
   const nome = nomeSessione || sessioni[0]?.nome || "";
@@ -745,17 +749,19 @@ async function vistaProgetto(slug, nomeSessione, tab) {
       </aside>
 
       <section class="pannello progetto-dx">
-        <nav class="tabs">
-          ${SCHEDE_SESSIONE.map(([k, n]) => `<a href="${link(k)}" class="${tab === k ? "attivo" : ""}">${n}</a>`).join("")}
-          <span class="spazio"></span>
-          <a href="#/impostazioni?progetto=${enc(slug)}" class="secondario" title="Il contesto si modifica in Impostazioni">Contesto</a>
-        </nav>
         <div class="centro" id="scheda"></div>
         ${s ? `<div class="pannello-piede">
-          ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
-                : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
-          <button class="btn grande" id="copia">Copia testo</button>
-          <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chat su questa sessione</a>
+          <div class="piede-sx">
+            <div class="switch-schede" role="tablist" aria-label="Tipo di contenuto">
+              ${SCHEDE_SESSIONE.map(([k, n]) => `<a href="${link(k)}" role="tab" class="${tab === k ? "attivo" : ""}" aria-selected="${tab === k}">${n}</a>`).join("")}
+            </div>
+          </div>
+          <div class="piede-dx">
+            ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
+                  : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
+            <button class="btn grande" id="copia">Copia testo</button>
+            <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chat su questa sessione</a>
+          </div>
         </div>` : ""}
       </section>
     </div>`;

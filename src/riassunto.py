@@ -29,7 +29,15 @@ from openai import OpenAI
 
 from comune import argomento_progetto, path_progetto, stop_richiesto
 
-INTERVALLO_MINUTI = float(os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", "10"))
+def _intervallo_minuti():
+    try:
+        valore = float(os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", "").strip().replace(",", "."))
+    except ValueError:
+        return 10.0
+    return valore if valore > 0 else 10.0
+
+
+INTERVALLO_MINUTI = _intervallo_minuti()
 MIN_NUOVI_CARATTERI = 1500          # sotto questa soglia aspetta altro testo
 MAX_CARATTERI_PER_BLOCCO = 15000    # backlog lunghi vengono spezzati
 # Il riassunto finale è diviso in parti (~1-1.5 ore di appunti ciascuna): ogni chiamata resta ben sotto
