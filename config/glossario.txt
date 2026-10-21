@@ -1,8 +1,4 @@
 # Termini tecnici che Whisper deve riconoscere (uno per riga o separati da virgola).
 # Viene riletto a ogni blocco: puoi modificarlo mentre la trascrizione è in corso.
 # Tienilo corto: Whisper usa solo i primi ~500 caratteri.
-Panthera, Sisthema, Var Group, ERP
-LDAP, Single Sign-On, tenant Microsoft 365, SDI, XML
-Go Live, DDT, distinta base, ciclo di lavoro
-anagrafica articoli, unità di misura, configuratore, schema di configurazione
-listino, causale, magazzino, saldi di magazzino, codificatore
+# Esempio per una lezione con termini inglesi: machine learning, dataset, overfitting, framework

@@ -1,0 +1,19 @@
+TIPO DI SESSIONE
+Lezione dal vivo registrata col microfono del PC. Parla soprattutto il docente; a volte gli studenti
+fanno domande. Materia: [scrivi qui la materia e l'argomento del corso].
+
+OBIETTIVO DEL RIASSUNTO
+Una dispensa di studio che permetta a chi non era presente di imparare TUTTO ciò che è stato spiegato:
+definizioni, concetti, esempi, formule, esercizi svolti e indicazioni d'esame, organizzata per argomento.
+
+COME È FATTA LA TRASCRIZIONE
+- È generata automaticamente dal riconoscimento vocale a blocchi: le frasi possono essere spezzate
+  tra un blocco e l'altro, senza punteggiatura affidabile e senza indicare chi parla.
+- Il microfono è lontano dal docente: parti a basso volume possono essere incomplete o sbagliate.
+- La lezione è in italiano ma usa spesso termini tecnici inglesi: scrivili correttamente in inglese
+  (es. "dipploi" -> deployment). Se un termine è chiaramente sbagliato ma il senso è evidente, correggilo.
+
+COSA È RUMORE (va SEGNALATO, non ignorato)
+- Rumori d'aula, chiacchiere degli studenti, appello, pause, questioni organizzative non legate alla materia.
+- Le comunicazioni organizzative utili (date d'esame, consegne, materiale da scaricare) NON sono rumore:
+  raccoglile in una sezione apposita.

@@ -6,8 +6,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"          # modelli di contesto/glossario copiati nei nuovi progetti
 PROGETTI_DIR = ROOT / "progetti"
 ENV_PATH = ROOT / ".env"
-# progetto usato quando gli script partono senza --progetto (vecchi .bat, riga di comando)
-PROGETTO_PREDEFINITO = "corso-panthera"
+# progetto usato quando gli script partono senza --progetto (riga di comando, .bat)
+PROGETTO_PREDEFINITO = "generale"
 
 # con pythonw stdout/stderr non esistono
 if sys.stdout:
@@ -68,15 +68,102 @@ def stop_richiesto() -> bool:
     return bool(stop_file) and Path(stop_file).exists()
 
 
-def dispositivi_ascolto() -> list:
-    """Uscite audio (WASAPI, escluso VB-CABLE) su cui rimandare la chiamata: [(indice, nome)]."""
-    import sounddevice as sd
-    return [
-        (i, d["name"]) for i, d in enumerate(sd.query_devices())
-        if d["max_output_channels"] > 0
-        and sd.query_hostapis(d["hostapi"])["name"] == "Windows WASAPI"
-        and "cable" not in d["name"].lower()
-    ]
+# ---------------------------------------------------------------------------
+# Dispositivi audio (WASAPI tramite PyAudioWPatch: microfoni e "loopback" di casse e cuffie)
+# ---------------------------------------------------------------------------
+
+LOOPBACK = " [Loopback]"
+BLOCCO_AUDIO = 1024
+
+
+def _elenco(p, pa, sorgente: str) -> tuple:
+    """([info dei dispositivi], nome del predefinito di Windows) per «microfono» o «pc»."""
+    wasapi = p.get_host_api_info_by_type(pa.paWASAPI)
+    if sorgente == "microfono":
+        lista = [d for d in (p.get_device_info_by_index(i) for i in range(p.get_device_count()))
+                 if d["hostApi"] == wasapi["index"] and d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")]
+        predefinito = wasapi["defaultInputDevice"]
+    else:
+        # il loopback registra quello che esce da casse o cuffie: si cattura il video senza cavi virtuali
+        lista = list(p.get_loopback_device_info_generator())
+        predefinito = wasapi["defaultOutputDevice"]
+    nome_predefinito = p.get_device_info_by_index(predefinito)["name"] if predefinito >= 0 else ""
+    return lista, nome_predefinito
+
+
+def nome_dispositivo(info: dict) -> str:
+    return info["name"].removesuffix(LOOPBACK)
+
+
+def dispositivi(sorgente: str) -> dict:
+    """Nomi dei dispositivi per la combobox della dashboard e quello predefinito di Windows."""
+    import pyaudiowpatch as pa
+    p = pa.PyAudio()                # un'istanza nuova vede anche i dispositivi appena collegati
+    try:
+        lista, predefinito = _elenco(p, pa, sorgente)
+        return {"nomi": sorted({nome_dispositivo(d) for d in lista}), "predefinito": predefinito}
+    finally:
+        p.terminate()
+
+
+class _Stream:
+    def __init__(self, p, stream):
+        self.p, self.stream = p, stream
+
+    def close(self):
+        try:
+            self.stream.stop_stream()
+            self.stream.close()
+        finally:
+            self.p.terminate()
+
+
+def _apri(sorgente: str, hint: str, callback):
+    """
+    Apre il dispositivo scelto (hint = parte del nome, vuoto = predefinito di Windows) e passa a
+    callback(blocco int16 [campioni, canali], frequenza) l'audio che arriva. Restituisce (stream, nome).
+    Ogni errore diventa un RuntimeError con un messaggio da mostrare così com'è nel log.
+    """
+    import numpy as np
+    import pyaudiowpatch as pa
+    cosa = "il microfono" if sorgente == "microfono" else "l'audio del PC da"
+    p = pa.PyAudio()
+    try:
+        lista, predefinito = _elenco(p, pa, sorgente)
+        cercato = (hint or predefinito).lower()
+        info = (next((d for d in lista if nome_dispositivo(d).lower() == cercato), None)
+                or next((d for d in lista if cercato and cercato in d["name"].lower()), None))
+        if info is None:
+            raise RuntimeError(f"Non trovo {cosa} «{hint or predefinito or 'predefinito'}»: è collegato? "
+                               "Puoi sceglierne un altro nella dashboard.")
+        canali, rate = int(info["maxInputChannels"]), int(info["defaultSampleRate"])
+
+        def on_audio(in_data, frame_count, time_info, status):
+            callback(np.frombuffer(in_data, dtype=np.int16).reshape(-1, canali), rate)
+            return (None, pa.paContinue)
+
+        try:
+            stream = p.open(format=pa.paInt16, channels=canali, rate=rate, input=True,
+                            input_device_index=info["index"], frames_per_buffer=BLOCCO_AUDIO,
+                            stream_callback=on_audio)
+        except Exception as exc:
+            blocco = ("Windows > Impostazioni > Privacy e sicurezza > Microfono (consenti alle app desktop), "
+                      "oppure un antivirus o software aziendale che impedisce la registrazione"
+                      if sorgente == "microfono" else "un antivirus o un software aziendale che impedisce la registrazione")
+            raise RuntimeError(f"Impossibile aprire {cosa} «{nome_dispositivo(info)}» ({exc}). "
+                               f"Se è bloccato controlla {blocco}.") from exc
+        return _Stream(p, stream), nome_dispositivo(info)
+    except BaseException:
+        p.terminate()
+        raise
+
+
+def apri_microfono(hint: str, callback):
+    return _apri("microfono", hint, callback)
+
+
+def apri_audio_pc(hint: str, callback):
+    return _apri("pc", hint, callback)
 
 
 load_dotenv()

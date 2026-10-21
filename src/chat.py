@@ -44,7 +44,7 @@ dal dallo dalla dai dagli dalle nel nello nella nei negli nelle sul sullo sulla 
 quello quella ci si ne mi ti vi lui lei noi voi loro mio tuo suo anche più molto poi già fare fa ha hanno
 essere stato detto dice spiegato spiega parlato""".split())
 
-SISTEMA = """Sei l'assistente di chi partecipa a queste chiamate (riunioni con clienti, chiamate con colleghi, corsi...).
+SISTEMA = """Sei l'assistente di chi segue queste sessioni (lezioni, video, corsi, riunioni...).
 Rispondi in italiano, in Markdown, in modo chiaro e pratico. Solo Markdown: mai tag HTML (per andare a capo in una tabella usa ";").
 Usa SOLO le informazioni nei documenti qui sotto (riassunti, appunti e trascrizioni delle sessioni).
 Se la risposta non c'è, dillo chiaramente e suggerisci cosa cercare; non inventare mai.

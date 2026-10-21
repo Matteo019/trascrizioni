@@ -1,15 +1,17 @@
 """
-Trascrizione real-time dell'audio di una chiamata (es. Microsoft Teams) in italiano.
+Trascrizione real-time dal microfono (lezione dal vivo) o dall'audio del PC (YouTube, qualsiasi video).
 
-Flusso audio:
-  App (Teams) -> "CABLE Input" (VB-CABLE, dispositivo di riproduzione predefinito)
-             -> "CABLE Output" letto da questo script
-             -> rimandato alle cuffie scelte (così continui a sentire)
-             -> Groq Whisper (trascrizione) -> progetti/<slug>/trascrizioni/trascrizione_X.txt
+Sorgenti (SORGENTE):
+  microfono  il microfono scelto (DISPOSITIVO=<parte del nome>, vuoto = predefinito di Windows).
+             L'audio intero si salva anche in progetti/<slug>/audio/ (Opus, ~14 MB l'ora): la lezione non si ripete.
+  pc         quello che esce dalle casse o dalle cuffie scelte (WASAPI loopback, senza cavi virtuali):
+             guardi il video normalmente e intanto viene trascritto.
+Lingua (LINGUA): it (predefinita, va bene anche con termini inglesi), en, oppure auto.
+
+Flusso: sorgente -> blocchi tagliati nelle pause -> Groq Whisper -> progetti/<slug>/trascrizioni/trascrizione_X.txt
 I riassunti li fa riassunto.py, da avviare separatamente.
 
 Uso (dalla cartella del progetto):
-  python src/trascrittore.py                      progetto predefinito (corso-panthera)
   python src/trascrittore.py --progetto <slug>
 Di solito lo avvia la dashboard (src/webapp.py).
 """
@@ -22,16 +24,15 @@ import wave
 import queue
 import re
 import shutil
-import subprocess
 import threading
 import datetime
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
+import soundfile as sf
 from groq import Groq
 
-from comune import argomento_progetto, path_progetto, stop_richiesto, dispositivi_ascolto, valore_dotenv
+from comune import argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -46,32 +47,40 @@ PAUSE_SECONDS = 0.4
 SAMPLE_RATE = 48000
 BLOCK = 1024
 WHISPER_RATE = 16000
-SILENCE_RMS = 300
-RIPROVA_ASCOLTO_SECONDI = 10   # cuffie che cambiano modalità o si scollegano: si riprova a riaprirle
-# il cavo virtuale manda dati anche nel silenzio: se per qualche secondo non arriva nulla
-# la cattura si è bloccata (es. Windows che riconfigura l'audio quando le cuffie Bluetooth cambiano modalità)
-SENZA_AUDIO_SECONDI = 5
-CUFFIE_MUTE_SECONDI = 15       # cuffie scelte che non suonano da così tanto: errore e riavvio dell'audio
-RIAVVIO_CUFFIE_OGNI = 60       # al massimo un riavvio dell'audio al minuto per colpa delle cuffie
-CONTROLLO_CUFFIE_SECONDI = 3   # ogni quanto si rilegge la scelta delle cuffie fatta nelle impostazioni
-# se dal cavo arriva solo silenzio digitale da così tanto, si controlla dove Windows manda l'audio
-SILENZIO_CAVO_SECONDI = 20
+# l'audio del PC (digitale) e il microfono col docente lontano hanno volumi molto diversi
+SILENCE_RMS = {"pc": 300, "microfono": 120}
+GUADAGNO_MAX = 8.0          # amplificazione massima dei blocchi a basso volume prima di Whisper
+SENZA_AUDIO_SECONDI = 5     # il microfono manda dati anche nel silenzio: se smette, la cattura è bloccata
+RIPROVA_SECONDI = 3
+OPUS_COMPRESSIONE = 0.9     # 0-1 in libsndfile: 0.9 ≈ 32 kbps, voce chiara e ~14 MB l'ora
 PROMPT_TAIL_CHARS = 300     # fine del blocco precedente passata a Whisper per continuità
-LANGUAGE = "it"
+
+SORGENTE = os.environ.get("SORGENTE", "pc").strip().lower()
+if SORGENTE not in SILENCE_RMS:
+    SORGENTE = "pc"
+DA_MICROFONO = SORGENTE == "microfono"
+DISPOSITIVO_HINT = os.environ.get("DISPOSITIVO", "").strip()
+# "it" anche per l'italiano pieno di termini inglesi: con "auto" Whisper sceglie una lingua per blocco
+# e a volte prende per inglese un blocco italiano, traducendolo.
+LINGUA = os.environ.get("LINGUA", "it").strip().lower() or "it"
+LANGUAGE = None if LINGUA == "auto" else LINGUA
+# l'audio del microfono si salva sempre; quello del PC solo se richiesto
+SALVA_AUDIO = DA_MICROFONO or os.environ.get("SALVA_AUDIO") == "1"
+SOGLIA_SILENZIO = SILENCE_RMS[SORGENTE]
+
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
 # quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
 WHISPER_MODELS = [m.strip() for m in os.environ.get(
     "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()]
-CAPTURE_DEVICE_HINT = os.environ.get("CAPTURE_DEVICE", "CABLE Output")
-MONITOR_DEVICE_HINT = os.environ.get("MONITOR_DEVICE", "")
 
 # Frasi che Whisper "inventa" sul silenzio o sul rumore
 HALLUCINATIONS = {
     "grazie.", "grazie", "grazie a tutti.", "grazie per la visione.",
     "sottotitoli creati dalla comunità amara.org", "sottotitoli a cura di qtss",
+    "thank you.", "thank you", "thanks for watching.", "thank you for watching.", "you", "bye.",
+    "subtitles by the amara.org community",
     "...", "",
 }
-
 
 
 def inventato(text: str) -> bool:
@@ -109,9 +118,8 @@ def sessione_da_usare() -> str:
 SESSION_NAME = sessione_da_usare()
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
 FAILED_DIR = PROGETTO_DIR / "da_ritrascrivere"
+AUDIO_DIR = PROGETTO_DIR / "audio"
 GLOSSARIO_PATH = PROGETTO_DIR / "glossario.txt"
-# lanciato dalla dashboard: nessuna domanda a terminale, il dispositivo arriva da MONITOR_DEVICE
-DA_DASHBOARD = os.environ.get("DASHBOARD") == "1"
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
@@ -120,170 +128,32 @@ stop_event = threading.Event()
 
 
 # ---------------------------------------------------------------------------
-# Dispositivi audio
+# Cattura
 # ---------------------------------------------------------------------------
 
-def host_api_name(device: dict) -> str:
-    return sd.query_hostapis(device["hostapi"])["name"]
+def in_stereo_48k(data: np.ndarray, rate: int) -> np.ndarray:
+    """Qualsiasi formato del dispositivo (mono, 4 canali, 44,1 kHz...) -> int16 stereo a SAMPLE_RATE."""
+    data = data.astype(np.float32)
+    if data.shape[1] == 1:
+        data = np.repeat(data, 2, axis=1)
+    elif data.shape[1] > 2:
+        data = data[:, :2]
+    if rate != SAMPLE_RATE and len(data):
+        n = len(data)
+        x = np.linspace(0, n - 1, max(1, round(n * SAMPLE_RATE / rate)))
+        data = np.stack([np.interp(x, np.arange(n), data[:, c]) for c in range(2)], axis=1)
+    return np.clip(data, -32768, 32767).astype(np.int16)
 
 
-def find_capture_device() -> int:
+def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
     """
-    CABLE Output va letto tramite WDM-KS: su alcuni PC (es. aziendali con software di
-    sicurezza) MME/DirectSound/WASAPI rifiutano la registrazione, WDM-KS no.
-    Si provano comunque tutte le API, WDM-KS per prima.
+    Apre microfono o audio del PC; ogni blocco arriva in raw già in stereo a 48 kHz.
+    Restituisce (stream, nome). Gli errori di apertura (dispositivo scollegato, bloccato da
+    Windows o da un software di sicurezza) salgono a chi chiama con un messaggio leggibile.
     """
-    order = ["Windows WDM-KS", "Windows WASAPI", "Windows DirectSound", "MME"]
-    devices = sd.query_devices()
-    candidates = [
-        (order.index(host_api_name(d)) if host_api_name(d) in order else 99, i)
-        for i, d in enumerate(devices)
-        if d["max_input_channels"] > 0 and CAPTURE_DEVICE_HINT.lower() in d["name"].lower()
-    ]
-    for _, idx in sorted(candidates):
-        try:
-            with sd.InputStream(device=idx, samplerate=SAMPLE_RATE, channels=2, dtype="int16",
-                                callback=lambda *args: None):
-                pass
-            return idx
-        except Exception:
-            continue
-    raise SystemExit(
-        f"Nessun dispositivo di cattura '{CAPTURE_DEVICE_HINT}' utilizzabile.\n"
-        "Installa VB-CABLE (https://vb-audio.com/Cable/) e imposta 'CABLE Input' come "
-        "dispositivo di riproduzione predefinito di Windows."
-    )
+    apri = apri_microfono if DA_MICROFONO else apri_audio_pc
+    return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
 
-
-def choose_monitor_device():
-    """Dispositivo su cui rimandare l'audio per continuare a sentire la chiamata."""
-    candidates = [i for i, _ in dispositivi_ascolto()]
-    devices = sd.query_devices()
-
-    if MONITOR_DEVICE_HINT:
-        for idx in candidates:
-            if MONITOR_DEVICE_HINT.lower() in devices[idx]["name"].lower():
-                return idx
-        if DA_DASHBOARD:
-            print(f"[WARN] Dispositivo di ascolto '{MONITOR_DEVICE_HINT}' non trovato: la chiamata non si sentirà in cuffia.")
-            return None
-        print(f"[WARN] MONITOR_DEVICE '{MONITOR_DEVICE_HINT}' non trovato, scegli dalla lista.")
-    elif DA_DASHBOARD:
-        return None
-
-    print("\nSu quale dispositivo vuoi SENTIRE la chiamata?")
-    print("  0) Nessuno (non sentire l'audio)")
-    for n, idx in enumerate(candidates, start=1):
-        print(f"  {n}) {devices[idx]['name']}")
-    while True:
-        choice = input("Numero: ").strip()
-        if choice.isdigit() and 0 <= int(choice) <= len(candidates):
-            return None if choice == "0" else candidates[int(choice) - 1]
-        print("Scelta non valida.")
-
-
-class Ascolto:
-    """
-    Rimanda l'audio della chiamata alle cuffie. Usa la frequenza che il dispositivo accetta
-    (le cuffie Bluetooth spesso rifiutano 48 kHz) convertendo l'audio al volo; se il dispositivo
-    cambia modalità o si scollega, riprova ad aprirlo ogni RIPROVA_ASCOLTO_SECONDI.
-    Se dopo CUFFIE_MUTE_SECONDI ancora non suona è un errore vero: lo segnala e chiede di
-    riavviare l'audio (serve_riavvio), perché Windows a volte invalida il dispositivo per sempre.
-    Se nelle impostazioni l'ascolto viene tolto, smette senza errori.
-    """
-
-    def __init__(self, idx):
-        self.idx, self.stream = idx, None
-        self.nome = sd.query_devices(idx)["name"] if idx is not None else None
-        self.rate, self.canali = SAMPLE_RATE, 2
-        self.prossimo_tentativo = 0.0
-        self.guasto_dal = None          # da quando le cuffie non suonano
-        self.errore_dato = False
-        self.serve_riavvio = False
-        self.apri()
-
-    def disattivato(self) -> bool:
-        """Cuffie tolte dalle impostazioni mentre la trascrizione gira: niente più tentativi né avvisi."""
-        if self.idx is not None and DA_DASHBOARD and not valore_dotenv("MONITOR_DEVICE"):
-            self.chiudi()
-            self.idx = None
-            self.serve_riavvio = False
-            print("[AUDIO] Ascolto in cuffia disattivato dalle impostazioni: la trascrizione continua.")
-        return self.idx is None
-
-    def guasto(self, motivo: str):
-        if self.guasto_dal is None:
-            self.guasto_dal = time.time()
-            print(f"[WARN] Ascolto in cuffia interrotto ({motivo[:90]}): riprovo (la trascrizione continua).")
-        elif not self.errore_dato and time.time() - self.guasto_dal > CUFFIE_MUTE_SECONDI:
-            self.errore_dato = True
-            self.serve_riavvio = True
-            print(f"[ERRORE] Non senti la chiamata in «{self.nome}» da {CUFFIE_MUTE_SECONDI} s: riavvio l'audio. "
-                  "Se continua, togli e rimetti le cuffie oppure scegli «nessuna» nelle impostazioni.")
-
-    def apri(self):
-        if self.disattivato():
-            return
-        self.prossimo_tentativo = time.time() + RIPROVA_ASCOLTO_SECONDI
-        try:
-            info = sd.query_devices(self.idx)
-        except Exception as exc:            # cuffie sparite: la trascrizione non deve fermarsi
-            self.guasto(str(exc))
-            return
-        errore = None
-        for rate in dict.fromkeys([SAMPLE_RATE, int(info["default_samplerate"]), 44100, 32000, 16000]):
-            for canali in (2, 1):
-                try:
-                    stream = sd.OutputStream(device=self.idx, samplerate=rate, channels=canali, dtype="int16")
-                    stream.start()
-                except Exception as exc:
-                    errore = exc
-                    continue
-                self.stream, self.rate, self.canali = stream, rate, canali
-                if rate != SAMPLE_RATE or canali != 2 or self.guasto_dal is not None:
-                    print(f"[AUDIO] Ascolto su {info['name']} a {rate} Hz, {canali} canali")
-                self.guasto_dal, self.errore_dato = None, False
-                return
-        self.guasto(f"impossibile riprodurre su {info['name']}: {errore}")
-
-    def converti(self, data: np.ndarray) -> np.ndarray:
-        if self.canali == 1:
-            data = data.mean(axis=1, keepdims=True)
-        if self.rate != SAMPLE_RATE:
-            n = len(data)
-            x = np.linspace(0, n - 1, max(1, round(n * self.rate / SAMPLE_RATE)))
-            data = np.stack([np.interp(x, np.arange(n), data[:, c]) for c in range(data.shape[1])], axis=1)
-        return np.ascontiguousarray(data.astype(np.int16))
-
-    def scrivi(self, data: np.ndarray):
-        if self.idx is None:
-            return
-        if self.stream is None:
-            if time.time() < self.prossimo_tentativo:
-                return
-            self.apri()
-            if self.stream is None:
-                return
-        try:
-            self.stream.write(self.converti(data))
-        except Exception as exc:
-            self.chiudi()
-            self.prossimo_tentativo = time.time() + 2
-            self.guasto(str(exc))
-
-    def chiudi(self):
-        if self.stream is not None:
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except Exception:
-                pass
-            self.stream = None
-
-
-# ---------------------------------------------------------------------------
-# Cattura + ascolto
-# ---------------------------------------------------------------------------
 
 def block_rms(data: np.ndarray) -> float:
     return float(np.sqrt(np.mean(data.astype(np.float32) ** 2))) if data.size else 0.0
@@ -296,81 +166,7 @@ def find_cut(rms: list, min_blocks: int) -> int:
     return min_blocks + int(np.argmin(values[min_blocks:]))
 
 
-def riapri_dispositivi(nome_ascolto):
-    """
-    Riavvia PortAudio (così vede di nuovo i dispositivi come sono adesso) e ritrova
-    il cavo virtuale e le cuffie per nome: dopo una riconfigurazione gli indici possono cambiare.
-    """
-    sd._terminate()
-    sd._initialize()
-    capture_idx = find_capture_device()
-    monitor_idx = None
-    if nome_ascolto:
-        monitor_idx = trova_ascolto(nome_ascolto)
-        if monitor_idx is None:
-            print(f"[WARN] Cuffie «{nome_ascolto}» non trovate: la trascrizione continua senza ascolto.")
-    return capture_idx, monitor_idx
-
-
-ultimo_suono = time.time()   # ultimo blocco non del tutto silenzioso arrivato dal cavo
-
-
-def uscita_predefinita() -> str:
-    """
-    Nome dell'uscita audio predefinita di Windows. Si legge in un processo a parte:
-    PortAudio qui dentro vede i dispositivi com'erano all'avvio, non i cambi successivi.
-    """
-    codice = "import sounddevice as sd; print(sd.query_devices(kind='output')['name'])"
-    r = subprocess.run([sys.executable, "-c", codice], capture_output=True, text=True, timeout=30,
-                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-    return r.stdout.strip()
-
-
-def controlla_uscita():
-    """
-    Caso «io sento ma la trascrizione no»: quando si collegano le cuffie Windows spesso le rende
-    uscita predefinita, e Teams suona lì invece che su CABLE Input. Il cavo allora manda solo
-    silenzio. Se succede, si controlla l'uscita predefinita e lo si segnala.
-    """
-    segnalato = False
-    while not stop_event.wait(SILENZIO_CAVO_SECONDI):
-        if time.time() - ultimo_suono < SILENZIO_CAVO_SECONDI:
-            if segnalato:
-                print("[AUDIO] L'audio della chiamata arriva di nuovo alla trascrizione.")
-                segnalato = False
-            continue
-        try:
-            nome = uscita_predefinita()
-        except Exception:
-            continue
-        if nome and "cable" not in nome.lower() and not segnalato:
-            segnalato = True
-            print(f"[ERRORE] Windows manda l'audio a «{nome}» invece che a «CABLE Input»: tu senti la chiamata "
-                  "ma la trascrizione no. Rimetti CABLE Input come uscita (icona del volume di Windows, "
-                  "o altoparlante in Teams): la trascrizione riprende da sola.")
-
-
-def cuffie_cambiate(monitor: Ascolto):
-    """
-    Cuffie scelte nelle impostazioni mentre la trascrizione gira (prima non c'erano o erano altre).
-    Restituisce il nome voluto se diverso da quelle in uso, altrimenti None.
-    """
-    voluto = valore_dotenv("MONITOR_DEVICE")
-    if not voluto or (monitor.nome and voluto.lower() in monitor.nome.lower()):
-        return None
-    return voluto
-
-
-def trova_ascolto(nome: str):
-    return next((i for i, n in dispositivi_ascolto() if nome.lower() in n.lower()), None)
-
-
-def capture_audio(capture_idx: int, monitor_idx):
-    global ultimo_suono
-    monitor = Ascolto(monitor_idx)
-    ultimo_riavvio_cuffie = 0.0
-    prossimo_controllo_cuffie = time.time() + CONTROLLO_CUFFIE_SECONDI
-    cuffie_volute = None          # scelte dopo l'avvio ma non ancora viste da PortAudio
+def capture_audio():
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
     min_blocks = int(MIN_CHUNK_SECONDS / block_seconds)
@@ -378,6 +174,9 @@ def capture_audio(capture_idx: int, monitor_idx):
     pause_blocks = int(PAUSE_SECONDS / block_seconds)
     blocks, rms = [], []
     quiet_run = 0
+    resto = np.zeros((0, 2), dtype=np.int16)   # i dispositivi mandano blocchi di misura qualsiasi
+    # l'audio del PC non manda nulla quando niente suona: quel tempo conta come silenzio
+    silenzio = np.zeros((BLOCK, 2), dtype=np.int16)
 
     def emit(cut: int):
         nonlocal blocks, rms
@@ -385,112 +184,80 @@ def capture_audio(capture_idx: int, monitor_idx):
         audio_queue.put((np.concatenate(blocks[:cut]), start))
         blocks, rms = blocks[cut:], rms[cut:]
 
-    # WDM-KS supporta solo la modalità a callback
-    def on_audio(indata, frames, time_info, status):
-        raw.put(indata.copy())
+    def aggiungi(data: np.ndarray):
+        nonlocal quiet_run
+        blocks.append(data)
+        rms.append(block_rms(data))
+        # pausa = volume molto sotto il livello medio del parlato di questo blocco
+        threshold = max(SOGLIA_SILENZIO, 0.2 * float(np.mean(rms)))
+        quiet_run = quiet_run + 1 if rms[-1] < threshold else 0
+        if len(blocks) >= min_blocks and quiet_run >= pause_blocks:
+            emit(len(blocks) - quiet_run // 2)
+            quiet_run = 0
+        elif len(blocks) >= max_blocks:
+            emit(find_cut(rms, min_blocks))
+            quiet_run = 0
 
-    bloccata = False
+    primo = True
     while not stop_event.is_set():
-        if bloccata:
-            # l'audio non arrivava più: si riaprono cattura e cuffie, l'audio già raccolto resta
-            monitor.chiudi()
-            try:
-                capture_idx, monitor_idx = riapri_dispositivi(
-                    cuffie_volute or (monitor.nome if monitor.idx is not None else None))
-            except BaseException as exc:       # anche SystemExit: cavo non trovato, si riprova
-                print(f"[ERRORE] Cattura audio non disponibile ({str(exc).splitlines()[0][:100]}): riprovo tra 3 s.")
-                stop_event.wait(3)
-                continue
-            monitor = Ascolto(monitor_idx)
-            if cuffie_volute and monitor.idx is not None:
-                print(f"[AUDIO] Ascolto su: {monitor.nome}")
-            cuffie_volute = None
         try:
-            stream = sd.InputStream(device=capture_idx, samplerate=SAMPLE_RATE, channels=2,
-                                    dtype="int16", blocksize=BLOCK, callback=on_audio)
-            stream.start()
+            stream, nome = apri_sorgente(raw)
         except Exception as exc:
-            print(f"[ERRORE] Impossibile aprire la cattura audio ({str(exc)[:100]}): riprovo tra 3 s.")
-            bloccata = True
-            stop_event.wait(3)
+            print(f"[ERRORE] {str(exc).splitlines()[0][:600]} Riprovo tra {RIPROVA_SECONDI} s.")
+            stop_event.wait(RIPROVA_SECONDI)
             continue
-        if bloccata:
-            print("[AUDIO] Cattura audio ripristinata: la trascrizione riprende.")
-        bloccata = False
+        print(f"[AUDIO] {'Cattura da' if primo else 'Cattura ripristinata:'} {nome}"
+              f" ({'microfono' if DA_MICROFONO else 'audio del PC'}) · lingua: {LINGUA}")
+        primo = False
         ultimo_audio = time.time()
         try:
             while not stop_event.is_set():
                 try:
                     data = raw.get(timeout=0.5)
                 except queue.Empty:
-                    if time.time() - ultimo_audio > SENZA_AUDIO_SECONDI:
-                        print(f"[ERRORE] L'audio della chiamata non arriva più da {SENZA_AUDIO_SECONDI} s "
-                              "(cattura bloccata): la riapro.")
-                        bloccata = True
-                        break
+                    if DA_MICROFONO:
+                        if time.time() - ultimo_audio > SENZA_AUDIO_SECONDI:
+                            print(f"[ERRORE] Dal microfono non arriva più audio da {SENZA_AUDIO_SECONDI} s "
+                                  "(scollegato?): lo riapro.")
+                            break
+                    else:
+                        for _ in range(int(0.5 * SAMPLE_RATE / BLOCK)):
+                            aggiungi(silenzio)
                     continue
                 ultimo_audio = time.time()
-                if data.any():
-                    ultimo_suono = ultimo_audio
-                monitor.scrivi(data)
-                blocks.append(data)
-                rms.append(block_rms(data))
-
-                # pausa = volume molto sotto il livello medio del parlato di questo blocco
-                threshold = max(SILENCE_RMS, 0.2 * float(np.mean(rms)))
-                quiet_run = quiet_run + 1 if rms[-1] < threshold else 0
-
-                if len(blocks) >= min_blocks and quiet_run >= pause_blocks:
-                    emit(len(blocks) - quiet_run // 2)
-                    quiet_run = 0
-                elif len(blocks) >= max_blocks:
-                    emit(find_cut(rms, min_blocks))
-                    quiet_run = 0
-
-                # cuffie scelte nelle impostazioni a trascrizione avviata: si passa a quelle
-                if DA_DASHBOARD and time.time() >= prossimo_controllo_cuffie:
-                    prossimo_controllo_cuffie = time.time() + CONTROLLO_CUFFIE_SECONDI
-                    voluto = cuffie_cambiate(monitor)
-                    if voluto:
-                        idx = trova_ascolto(voluto)
-                        if idx is not None:
-                            monitor.chiudi()
-                            monitor = Ascolto(idx)
-                            print(f"[AUDIO] Ascolto su: {monitor.nome}")
-                        elif time.time() - ultimo_riavvio_cuffie > RIAVVIO_CUFFIE_OGNI:
-                            # collegate dopo l'avvio: serve rileggere i dispositivi
-                            ultimo_riavvio_cuffie = time.time()
-                            cuffie_volute = voluto
-                            print(f"[AUDIO] Cerco le cuffie «{voluto}» scelte nelle impostazioni.")
-                            bloccata = True
-                            break
-
-                # cuffie che non tornano da sole: Windows le ha invalidate, serve riaprire tutto l'audio
-                if monitor.serve_riavvio and time.time() - ultimo_riavvio_cuffie > RIAVVIO_CUFFIE_OGNI:
-                    ultimo_riavvio_cuffie = time.time()
-                    bloccata = True
-                    break
+                resto = np.concatenate([resto, data])
+                while len(resto) >= BLOCK:
+                    aggiungi(resto[:BLOCK])
+                    resto = resto[BLOCK:]
         finally:
             try:
-                stream.abort()
                 stream.close()
             except Exception:
                 pass
 
     if blocks:
         emit(len(blocks))
-    monitor.chiudi()
 
 
 # ---------------------------------------------------------------------------
 # Trascrizione (Groq Whisper)
 # ---------------------------------------------------------------------------
 
-def to_whisper_wav(stereo: np.ndarray) -> bytes:
+def mono_16k(stereo: np.ndarray) -> np.ndarray:
     mono = stereo.astype(np.float32).mean(axis=1)
     factor = SAMPLE_RATE // WHISPER_RATE
-    mono = mono[: len(mono) // factor * factor].reshape(-1, factor).mean(axis=1)
-    pcm = np.clip(mono, -32768, 32767).astype(np.int16)
+    return mono[: len(mono) // factor * factor].reshape(-1, factor).mean(axis=1)
+
+
+def normalizza(mono: np.ndarray) -> np.ndarray:
+    """Blocchi a basso volume (docente lontano dal microfono) alzati fino a ~-4 dB, al massimo GUADAGNO_MAX volte."""
+    picco = float(np.percentile(np.abs(mono), 99.9)) if mono.size else 0.0
+    if picco <= 0:
+        return mono
+    return mono * min(GUADAGNO_MAX, max(1.0, 20000 / picco))
+
+
+def wav_bytes(pcm: np.ndarray) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -500,11 +267,49 @@ def to_whisper_wav(stereo: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
+def to_whisper_wav(stereo: np.ndarray) -> bytes:
+    return wav_bytes(np.clip(normalizza(mono_16k(stereo)), -32768, 32767).astype(np.int16))
+
+
 def is_silent(stereo: np.ndarray) -> bool:
-    if stereo.size == 0:
-        return True
-    rms = float(np.sqrt(np.mean(stereo.astype(np.float32) ** 2)))
-    return rms < SILENCE_RMS
+    return block_rms(stereo) < SOGLIA_SILENZIO
+
+
+class Registrazione:
+    """
+    Audio intero della sessione in audio/<sessione>_<ora>.ogg, silenzi compresi: se rete o Groq
+    cadono durante una lezione, l'audio resta. Opus a ~32 kbps (16 kHz mono) basta per la voce:
+    ~14 MB l'ora invece dei ~115 di un WAV. Un file per avvio.
+    """
+
+    def __init__(self):
+        self.file = None
+        if not SALVA_AUDIO:
+            return
+        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        path = AUDIO_DIR / f"{SESSION_NAME}_{datetime.datetime.now():%H%M%S}.ogg"
+        try:
+            self.file = sf.SoundFile(str(path), "w", samplerate=WHISPER_RATE, channels=1,
+                                     format="OGG", subtype="OPUS", compression_level=OPUS_COMPRESSIONE)
+            print(f"[INFO] Audio salvato in: {path}")
+        except Exception as exc:     # la trascrizione conta più della registrazione: si va avanti senza
+            print(f"[WARN] Impossibile salvare l'audio in {path} ({str(exc)[:150]}): continuo senza.")
+
+    def scrivi(self, stereo: np.ndarray):
+        if self.file is not None:
+            try:
+                self.file.write(np.clip(mono_16k(stereo), -32768, 32767).astype(np.int16))
+            except Exception as exc:
+                print(f"[WARN] Salvataggio dell'audio interrotto ({str(exc)[:150]}): la trascrizione continua.")
+                self.chiudi()
+
+    def chiudi(self):
+        if self.file is not None:
+            try:
+                self.file.close()
+            except Exception:
+                pass
+            self.file = None
 
 
 def load_glossary() -> str:
@@ -526,21 +331,23 @@ def build_prompt(previous_text: str) -> str:
     return " ".join(p for p in (f"Termini: {glossary}." if glossary else "", tail) if p)
 
 
-def transcribe_wav(groq_client: Groq, wav_bytes: bytes, prompt: str, attempts: int):
+def transcribe_wav(groq_client: Groq, wav: bytes, prompt: str, attempts: int):
     """
     Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq non risponde.
     A ogni tentativo prova i modelli in ordine: se il primo fallisce passa subito al successivo.
     """
+    # con LINGUA=auto la lingua non si passa: Whisper la riconosce da solo
+    lingua = {"language": LANGUAGE} if LANGUAGE else {}
     for attempt in range(attempts):
         for model in WHISPER_MODELS:
             try:
                 result = groq_client.audio.transcriptions.create(
-                    file=("chunk.wav", wav_bytes),
+                    file=("chunk.wav", wav),
                     model=model,
-                    language=LANGUAGE,
                     response_format="text",
                     temperature=0.0,
                     prompt=prompt or None,
+                    **lingua,
                 )
                 text = str(result).strip()
                 if inventato(text) or (prompt and text in prompt):
@@ -559,10 +366,10 @@ def transcribe_wav(groq_client: Groq, wav_bytes: bytes, prompt: str, attempts: i
 # Blocchi non trascritti: salvati su disco e recuperati appena Groq risponde
 # ---------------------------------------------------------------------------
 
-def save_failed(wav_bytes: bytes, start: datetime.datetime) -> Path:
+def save_failed(wav: bytes, start: datetime.datetime) -> Path:
     FAILED_DIR.mkdir(exist_ok=True)
     path = FAILED_DIR / f"{SESSION_NAME}__{start:%H%M%S}.wav"
-    path.write_bytes(wav_bytes)
+    path.write_bytes(wav)
     return path
 
 
@@ -602,28 +409,24 @@ def main():
     groq_client = Groq(api_key=GROQ_API_KEY)
     retry_failed(groq_client)
 
-    capture_idx = find_capture_device()
-    monitor_idx = choose_monitor_device()
-    print(f"\n[AUDIO] Cattura da: {sd.query_devices(capture_idx)['name']}")
-    if monitor_idx is not None:
-        print(f"[AUDIO] Ascolto su: {sd.query_devices(monitor_idx)['name']}")
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
     print("[INFO] Per i riassunti avvia a parte riassunto.py. Premi CTRL+C per fermare.\n")
+    registrazione = Registrazione()
 
-    cattura = threading.Thread(target=capture_audio, args=(capture_idx, monitor_idx), daemon=True)
+    cattura = threading.Thread(target=capture_audio, daemon=True)
     cattura.start()
-    threading.Thread(target=controlla_uscita, daemon=True).start()
 
     previous_text = ""
 
     def trascrivi(chunk, start, transcript, attempts):
         nonlocal previous_text
+        registrazione.scrivi(chunk)
         if is_silent(chunk):
             return
-        wav_bytes = to_whisper_wav(chunk)
-        text = transcribe_wav(groq_client, wav_bytes, build_prompt(previous_text), attempts=attempts)
+        wav = to_whisper_wav(chunk)
+        text = transcribe_wav(groq_client, wav, build_prompt(previous_text), attempts=attempts)
         if text is None:
-            path = save_failed(wav_bytes, start)
+            path = save_failed(wav, start)
             line = f"[{start:%H:%M:%S}] [AUDIO NON TRASCRITTO: salvato in {path.name}, verrà recuperato]"
         elif text:
             line = f"[{start:%H:%M:%S}] {text}"
@@ -656,6 +459,7 @@ def main():
             while not audio_queue.empty():
                 chunk, start = audio_queue.get()
                 trascrivi(chunk, start, transcript, attempts=2)
+            registrazione.chiudi()
             print(f"\n[INFO] Fermato. Trascrizione salvata in: {TRANSCRIPT_PATH}")
             if FAILED_DIR.exists() and any(FAILED_DIR.glob("*.wav")):
                 print(f"[INFO] Blocchi non trascritti in {FAILED_DIR}: verranno recuperati al prossimo avvio.")

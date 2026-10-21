@@ -278,6 +278,23 @@ a.tag:hover { text-decoration: none; filter: brightness(.97); }
 .processo-corpo[hidden] { display: none; }
 .processo-azioni { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .processo-azioni .info-extra { font-size: 13px; color: var(--ink-500); }
+.sorgente-audio { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); margin: var(--sp-3) 0; }
+.sorgente-audio label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-500); flex: 1 1 160px; min-width: 0; }
+.sorgente-audio label[hidden] { display: none; }
+.sorgente-audio label.spunta { flex-direction: row; align-items: center; font-weight: 500; font-size: 13px; color: var(--ink-900); flex: 1 1 100%; }
+.sorgente-audio select { width: 100%; text-overflow: ellipsis; }
+.cr-sorgenti { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3); margin-top: var(--sp-3); }
+.cr-sorgente {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: var(--sp-4);
+  border: 1px solid var(--line); border-radius: var(--radius-3); background: var(--surface);
+  color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.cr-sorgente:hover, .cr-sorgente:focus-visible { border-color: var(--green); box-shadow: var(--elev-hover); }
+.cr-sorgente svg { color: var(--green); }
+.cr-sorgente svg { width: 28px; height: 28px; margin-bottom: var(--sp-2); }
+.cr-sorgente strong { font-size: 16px; }
+.cr-sorgente span { font-size: 13px; color: var(--ink-500); }
+dialog .campo[hidden] { display: none; }
 .log {
   margin-top: var(--sp-3); background: var(--surface-2); border-radius: var(--radius-1);
   font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; color: var(--ink-700);
@@ -683,6 +700,10 @@ dialog textarea { resize: vertical; }
 .switch-processi button:hover { color: var(--ink-900); }
 .switch-processi button.attivo { background: var(--surface); color: var(--ink-900); box-shadow: 0 1px 3px rgba(22,31,25,.15); }
 .switch-processi .tag { min-height: 20px; padding: 0 8px; font-size: 11px; }
+/* colonna stretta: le due schede si restringono invece di far scorrere la card */
+.switch-processi button { min-width: 0; padding: 0 6px; }
+.switch-processi .sw-stato { min-width: 0; overflow: hidden; }
+.switch-processi .sw-stato .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .processi-card .processo { box-shadow: none; border-radius: 0; background: transparent; }
 .processi-card .processo[hidden] { display: none; }
 .processi-card .processo-testa { display: none; }

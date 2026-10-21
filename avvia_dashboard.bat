@@ -13,7 +13,7 @@ if not exist ".venv" (
     echo Prima installazione delle dipendenze...
     python -m venv .venv
 )
-".venv\Scripts\python.exe" -c "import fastapi, uvicorn, markdown, xhtml2pdf, sounddevice, groq, openai" >nul 2>nul
+".venv\Scripts\python.exe" -c "import fastapi, uvicorn, markdown, xhtml2pdf, pyaudiowpatch, soundfile, groq, openai" >nul 2>nul
 if errorlevel 1 (
     echo Installazione delle dipendenze della dashboard...
     ".venv\Scripts\python.exe" -m pip install -q -r requirements.txt

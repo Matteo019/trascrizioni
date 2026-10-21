@@ -83,7 +83,7 @@ function memoria(chiave, valore) {
    Dialogo, tooltip, menu
    =================================================================== */
 
-function dialogo({ titolo, testo = "", campi = [], conferma = "Conferma", pericolo = false, largo = false }) {
+function dialogo({ titolo, testo = "", campi = [], conferma = "Conferma", pericolo = false, largo = false }, aperto = null) {
   const dlg = $("#dialogo");
   dlg.classList.toggle("largo", largo);
   const form = $("#dialogo-form");
@@ -93,7 +93,9 @@ function dialogo({ titolo, testo = "", campi = [], conferma = "Conferma", perico
     ${campi.map(c => `
       <div class="campo">
         <label for="dlg-${c.id}">${esc(c.label)}</label>
-        ${c.multiriga
+        ${c.opzioni
+          ? `<select id="dlg-${c.id}">${c.opzioni.map(([v, n]) => `<option value="${esc(v)}" ${v === (c.valore ?? "") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`
+          : c.multiriga
           ? `<textarea id="dlg-${c.id}" rows="${c.righe || 4}" placeholder="${esc(c.segnaposto || "")}">${esc(c.valore || "")}</textarea>`
           : `<input type="text" id="dlg-${c.id}" value="${esc(c.valore || "")}" placeholder="${esc(c.segnaposto || "")}" autocomplete="off">`}
       </div>`).join("")}
@@ -111,6 +113,8 @@ function dialogo({ titolo, testo = "", campi = [], conferma = "Conferma", perico
     dlg.returnValue = "";
     // Annulla non è un submit: Invio in un campo conferma, non annulla
     form.querySelector("[data-annulla]").onclick = () => dlg.close("annulla");
+    campi.filter(c => c.cambia).forEach(c => $(`#dlg-${c.id}`).addEventListener("change", e => c.cambia(e.target.value)));
+    aperto?.();
     dlg.showModal();
     window.effetti?.dialogo(dlg);
     const primo = form.querySelector("input, textarea");
@@ -442,7 +446,7 @@ async function vistaProgetti(query) {
   const riepilogoOggi = [
     oggi.sessioni ? `${oggi.sessioni} ${oggi.sessioni === 1 ? "sessione" : "sessioni"} oggi` : "Nessuna sessione oggi",
     oggi.minuti ? `${durata(oggi.minuti)} trascritte` : "",
-    inCorso ? "una chiamata in corso" : "",
+    inCorso ? "una trascrizione in corso" : "",
   ].filter(Boolean).join(" · ");
 
   vista.innerHTML = `
@@ -596,10 +600,11 @@ async function vistaProgetti(query) {
     let html;
     if (!processi.length) {
       html = `
-        <div class="cr-tasto-testa"><span class="cr-icona b-spento">●</span><strong>Niente in corso</strong></div>
-        <p class="secondario">Quando parte una chiamata, qui vedi la trascrizione in diretta.</p>
-        ${ultimoProgetto ? `<div class="b-azioni"><button class="btn primario" id="cr-avvia" title="Continua l'ultima sessione del progetto">Continua trascrizione</button>
-          <span class="secondario piccolo">su ${esc(ultimoProgetto.nome)}</span></div>` : ""}`;
+        <div class="cr-tasto-testa"><span class="cr-icona b-spento">●</span><strong>Cosa vuoi trascrivere?</strong></div>
+        <div class="cr-sorgenti">
+          <button class="cr-sorgente" data-sorgente="microfono">${ICONE_SORGENTE.microfono}<strong>Microfono</strong><span>Lezione dal vivo</span></button>
+          <button class="cr-sorgente" data-sorgente="pc">${ICONE_SORGENTE.pc}<strong>Audio del PC</strong><span>YouTube, qualsiasi video</span></button>
+        </div>`;
     } else {
       const p = trascr || processi[0];
       let frasi = [], avviso = "";
@@ -610,12 +615,12 @@ async function vistaProgetti(query) {
         // ultimo messaggio di stato: un errore non seguito da "ripristinata" è un problema in corso
         const stato = righe.filter(r => /^\[(ERRORE|AUDIO|WARN)\]/.test(r)).pop() || "";
         if (/^\[(ERRORE|WARN)\]/.test(stato)) avviso = stato.replace(/^\[\w+\]\s*/, "");
-        // nessuna frase nuova da un po': pausa lunga oppure l'audio non arriva al cavo virtuale
+        // nessuna frase nuova da un po': pausa lunga oppure l'audio non arriva
         const ultima = /^\[(\d\d):(\d\d):(\d\d)/.exec(frasi[frasi.length - 1] || "");
         const daQuando = new Date(Math.max(new Date(trascr.avviato), ultima
           ? new Date().setHours(+ultima[1], +ultima[2], +ultima[3], 0) : 0));
         const minuti = Math.floor((Date.now() - daQuando) / 60000);
-        if (!avviso && minuti >= 3) avviso = `Nessuna frase trascritta da ${minuti} min: è una pausa o l'audio non arriva? Se non senti la chiamata in cuffia, riavvia la trascrizione.`;
+        if (!avviso && minuti >= 3) avviso = `Nessuna frase trascritta da ${minuti} min: è una pausa o l'audio non arriva? Controlla il dispositivo scelto e, se serve, riavvia la trascrizione.`;
       }
       const minutiAttivo = p.avviato ? Math.max(0, Math.round((Date.now() - new Date(p.avviato)) / 60000)) : 0;
       html = `
@@ -639,13 +644,7 @@ async function vistaProgetti(query) {
     if (processi.length) box.dataset.href = `#/p/${enc((trascr || processi[0]).progetto)}`;
     box.innerHTML = html;
     if (nuove) window.effetti?.entrata(box.querySelectorAll(".b-frase:last-child"));
-    $("#cr-avvia")?.addEventListener("click", async () => {
-      try {
-        await api(`/api/progetti/${enc(ultimoProgetto.slug)}/processi/trascrizione/avvia`, { method: "POST" });
-        toast(`Trascrizione ripresa su ${ultimoProgetto.nome}`, "ok");
-        aggiornaHeader(); aggiornaLive();
-      } catch (e) { toast(e.message, "errore"); }
-    });
+    $$(".cr-sorgente", box).forEach(b => b.onclick = () => avvioRapido(b.dataset.sorgente, progetti));
     $("#cr-ferma")?.addEventListener("click", async () => {
       if (!await dialogo({ titolo: "Fermare la trascrizione?", testo: "Viene trascritto anche il blocco in corso, poi si ferma.", conferma: "Ferma" })) return;
       try {
@@ -659,13 +658,87 @@ async function vistaProgetti(query) {
   ogni(4000, aggiornaLive);
 }
 
+const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (YouTube, video)"]];
+const ICONE_SORGENTE = {
+  microfono: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  pc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m10 8 4 2-4 2z"/></svg>',
+};
+const LINGUE = [["it", "Italiano (anche con termini inglesi)"], ["en", "Inglese"], ["auto", "Automatica (lingue diverse, non mescolate)"]];
+const TIPI_SESSIONE = [["", "Scrivo io il contesto"], ["lezione", "Lezione dal vivo"], ["video", "Video (YouTube…)"], ["riunione", "Riunione / chiamata"]];
+
+/* opzioni della combobox: il predefinito di Windows per primo, quello salvato anche se ora è scollegato */
+async function opzioniDispositivo(sorgente, scelto = "") {
+  const d = await api(`/api/dispositivi/${sorgente}`).catch(e => ({ nomi: [], predefinito: "", errore: e.message }));
+  const opzioni = [["", `Predefinito di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
+  if (scelto && !d.nomi.includes(scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
+  return { opzioni, errore: d.errore };
+}
+
+/* avvio dalla home: dispositivo, lingua e progetto, poi una sessione nuova */
+async function avvioRapido(sorgente, progetti) {
+  const attivi = progetti.filter(p => p.stato !== "archiviato");
+  // si propone l'ultimo progetto usato con la stessa sorgente
+  const simile = attivi.find(p => p.sorgente === sorgente);
+  const { opzioni, errore } = await opzioniDispositivo(sorgente, simile?.dispositivo || "");
+  if (errore) toast(errore, "errore");
+  const nuovo = "__nuovo";
+  const mostraNome = v => { $("#dlg-nome").closest(".campo").hidden = v !== nuovo; };
+  const titolo = sorgente === "microfono" ? "Registra dal microfono" : "Trascrivi l'audio del PC";
+  const v = await dialogo({
+    titolo, conferma: "Avvia",
+    testo: sorgente === "microfono"
+      ? "L'audio della lezione si salva anche nella cartella del progetto, compresso (~14 MB l'ora)."
+      : "Fai partire il video normalmente: viene trascritto quello che esce dal dispositivo scelto.",
+    campi: [
+      { id: "dispositivo", label: sorgente === "microfono" ? "Microfono" : "Audio che esce da", opzioni, valore: simile?.dispositivo || "" },
+      { id: "lingua", label: "Lingua", opzioni: LINGUE, valore: simile?.lingua || "it" },
+      { id: "progetto", label: "Progetto", opzioni: [...attivi.map(p => [p.slug, p.nome]), [nuovo, "+ Nuovo progetto…"]],
+        valore: simile?.slug || (attivi.length ? attivi[0].slug : nuovo), cambia: mostraNome },
+      { id: "nome", label: "Nome del nuovo progetto", segnaposto: sorgente === "microfono" ? "Es. Fisica 1, Diritto privato" : "Es. Video di Python" },
+    ],
+  }, () => mostraNome($("#dlg-progetto").value));
+  if (!v) return;
+  const audio = { sorgente, dispositivo: v.dispositivo, lingua: v.lingua };
+  let slug = v.progetto;
+  try {
+    if (slug === nuovo) {
+      if (!v.nome.trim()) { toast("Scrivi il nome del nuovo progetto", "errore"); return avvioRapido(sorgente, progetti); }
+      const tipo = sorgente === "microfono" ? "lezione" : "video";
+      const contesto = (await api(`/api/modelli-contesto/${tipo}`)).testo;
+      slug = (await api("/api/progetti", { method: "POST", body: { nome: v.nome, contesto, ...audio } })).slug;
+    } else {
+      await api(`/api/progetti/${enc(slug)}`, { method: "PATCH", body: audio });
+    }
+  } catch (e) { toast(e.message, "errore"); return; }
+  try {
+    // ogni lezione o video è una sessione a sé, con il suo riassunto
+    await api(`/api/progetti/${enc(slug)}/processi/trascrizione/avvia?nuova=true`, { method: "POST" });
+    toast("Trascrizione avviata", "ok");
+    aggiornaHeader();
+  } catch (e) { toast(e.message, "errore"); }
+  // anche se l'avvio non riesce si apre il progetto: le scelte sono salvate e lì si riprova
+  location.hash = `#/p/${enc(slug)}?tab=trascrizione`;
+}
+
 async function nuovoProgetto(valori = {}) {
+  // il modello di contesto si mette solo se il campo è vuoto o contiene ancora un modello non modificato
+  let modello = valori.modello || "";
+  const cambiaTipo = async tipo => {
+    $("#dlg-sorgente").value = tipo === "lezione" ? "microfono" : "pc";
+    const area = $("#dlg-contesto");
+    if (area.value.trim() && area.value.trim() !== modello.trim()) return;
+    try { modello = tipo ? (await api(`/api/modelli-contesto/${tipo}`)).testo : ""; } catch (e) { modello = ""; }
+    area.value = modello;
+  };
   const v = await dialogo({
     titolo: "Nuovo progetto", conferma: "Crea progetto", largo: true,
     campi: [
-      { id: "nome", label: "Nome", valore: valori.nome, segnaposto: "Es. Cliente Rossi, Corso Panthera, Team interno" },
+      { id: "nome", label: "Nome", valore: valori.nome, segnaposto: "Es. Fisica 1, Corso di inglese, Video di Python" },
+      { id: "tipo", label: "Tipo di sessione", opzioni: TIPI_SESSIONE, valore: valori.tipo, cambia: cambiaTipo },
+      { id: "sorgente", label: "Da dove arriva l'audio", opzioni: SORGENTI, valore: valori.sorgente || "pc" },
+      { id: "lingua", label: "Lingua", opzioni: LINGUE, valore: valori.lingua || "it" },
       { id: "contesto", label: "Contesto (obbligatorio)", multiriga: true, righe: 7, valore: valori.contesto,
-        segnaposto: "Di cosa parlano queste chiamate, chi partecipa, cosa conta e cosa è rumore. Serve all'AI per i riassunti." },
+        segnaposto: "Di cosa parlano queste sessioni, chi parla, cosa conta e cosa è rumore. Serve all'AI per i riassunti." },
       { id: "glossario", label: "Glossario (facoltativo)", multiriga: true, righe: 3, valore: valori.glossario,
         segnaposto: "Nomi, sigle e termini tecnici da scrivere giusti, separati da virgola" },
     ],
@@ -673,13 +746,13 @@ async function nuovoProgetto(valori = {}) {
   if (!v) return;
   if (!v.nome.trim() || !v.contesto.trim()) {
     toast(!v.nome.trim() ? "Scrivi il nome del progetto" : "Scrivi il contesto: è obbligatorio", "errore");
-    return nuovoProgetto(v);
+    return nuovoProgetto({ ...v, modello });
   }
   try {
     const { slug } = await api("/api/progetti", { method: "POST", body: v });
     toast("Progetto creato", "ok");
     location.hash = `#/p/${enc(slug)}`;
-  } catch (e) { toast(e.message, "errore"); nuovoProgetto(v); }
+  } catch (e) { toast(e.message, "errore"); nuovoProgetto({ ...v, modello }); }
 }
 
 /* ===================================================================
@@ -793,7 +866,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
     if (el) copiaFormattato(el); else toast("Niente da copiare in questa sessione");
   });
 
-  pannelloProcesso(slug, "trascrizione", $("#proc-trascrizione"));
+  pannelloProcesso(slug, "trascrizione", $("#proc-trascrizione"), p);
   pannelloProcesso(slug, "riassunto", $("#proc-riassunto"));
   // un'unica card: il selettore sceglie quale dei due processi mostrare
   const mostraProcesso = tipo => {
@@ -811,7 +884,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
   mostraProcesso(memoria("processo-scelto") === "riassunto" ? "riassunto" : "trascrizione");
 
   if (!s) {
-    $("#scheda").innerHTML = `<div class="vuoto"><strong>Ancora nessuna sessione</strong>Apri «Trascrizione» qui sopra e premi Avvia quando inizia la chiamata.</div>`;
+    $("#scheda").innerHTML = `<div class="vuoto"><strong>Ancora nessuna sessione</strong>Apri «Trascrizione» qui sopra e premi Avvia, oppure dalla home scegli Microfono o Audio del PC.</div>`;
     return;
   }
   if (tab === "trascrizione") await schedaMinuta(slug, nome, s);
@@ -839,7 +912,7 @@ function classeRiga(r) {
   return "";
 }
 
-function pannelloProcesso(slug, tipo, box) {
+function pannelloProcesso(slug, tipo, box, progetto = {}) {
   let offset = -1, stato = null, errori = 0, inCorso = false;
   const aperto = memoria(`aperto-${tipo}`) === "1";
   const logVisibile = memoria(`log-${tipo}`) === "1";
@@ -853,6 +926,15 @@ function pannelloProcesso(slug, tipo, box) {
       <div class="processo-azioni">
         <span class="bottoni"></span>
         <span class="info-extra"></span>
+        <span class="spazio"></span>
+      </div>
+      ${tipo === "trascrizione" ? `<div class="sorgente-audio">
+        <label>Audio<select data-k="sorgente" aria-label="Sorgente audio">${SORGENTI.map(([v, n]) => `<option value="${v}">${esc(n)}</option>`).join("")}</select></label>
+        <label><span class="etichetta-dispositivo">Dispositivo</span><select data-k="dispositivo" aria-label="Dispositivo"></select></label>
+        <label>Lingua<select data-k="lingua" aria-label="Lingua">${LINGUE.map(([v, n]) => `<option value="${v}">${esc(n)}</option>`).join("")}</select></label>
+        <label class="solo-pc spunta"><input type="checkbox" data-k="salva_audio"> Salva anche l'audio</label>
+      </div>` : ""}
+      <div class="processo-azioni processo-azioni-log">
         <span class="spazio"></span>
         <span class="err"></span>
         <button class="btn piccolo fantasma mostra-log">${logVisibile ? "Nascondi log" : "Mostra log"}</button>
@@ -878,10 +960,34 @@ function pannelloProcesso(slug, tipo, box) {
   };
 
   if (tipo === "trascrizione") {
-    api("/api/impostazioni").then(i => {
-      const disp = i.valori.MONITOR_DEVICE;
-      $(".info-extra", box).innerHTML = `Cuffie: ${disp ? esc(disp) : "nessuna"} · <a href="#/impostazioni">cambia</a>`;
-    }).catch(() => {});
+    const sa = $(".sorgente-audio", box);
+    const campo = k => $(`[data-k="${k}"]`, sa);
+    // il dispositivo scelto vale per la sua sorgente: cambiando sorgente si riparte dal predefinito
+    const caricaDispositivi = async scelto => {
+      const mic = campo("sorgente").value === "microfono";
+      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono" : "Audio che esce da";
+      $(".solo-pc", sa).hidden = mic;
+      $(".info-extra", box).textContent = mic ? "L'audio si salva anche, compresso" : "";
+      const { opzioni, errore } = await opzioniDispositivo(campo("sorgente").value, scelto);
+      campo("dispositivo").innerHTML = opzioni.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
+      campo("dispositivo").value = scelto;
+      if (errore) $(".info-extra", box).textContent = errore;
+    };
+    campo("sorgente").value = progetto.sorgente || "pc";
+    campo("lingua").value = progetto.lingua || "it";
+    campo("salva_audio").checked = !!progetto.salva_audio;
+    caricaDispositivi(progetto.dispositivo || "");
+    // ogni scelta si salva subito nel progetto: vale dal prossimo avvio
+    sa.addEventListener("change", async e => {
+      const k = e.target.dataset.k;
+      if (!k) return;
+      const body = { [k]: k === "salva_audio" ? e.target.checked : e.target.value };
+      if (k === "sorgente") { body.dispositivo = ""; await caricaDispositivi(""); }
+      try {
+        await api(`/api/progetti/${enc(slug)}`, { method: "PATCH", body });
+        if (stato?.attivo) toast("Salvato: vale dal prossimo avvio della trascrizione");
+      } catch (err) { toast(err.message, "errore"); }
+    });
   }
 
   function disegnaStato() {
@@ -895,6 +1001,7 @@ function pannelloProcesso(slug, tipo, box) {
     const sw = $(`.switch-processi [data-proc="${tipo}"] .sw-stato`);
     if (sw) sw.innerHTML = tag;
 
+    $$(".sorgente-audio select, .sorgente-audio input", box).forEach(c => c.disabled = s.attivo);
     const bottoni = $(".bottoni", box);
     const firma = `${s.attivo}|${s.in_chiusura}`;
     if (bottoni.dataset.firma !== firma) {
@@ -1478,12 +1585,6 @@ async function vistaCalendario(query) {
 async function vistaImpostazioni(query) {
   const [i, progetti] = await Promise.all([api("/api/impostazioni"), api("/api/progetti")]);
   const progScelto = progetti.some(p => p.slug === query.get("progetto")) ? query.get("progetto") : (progetti[0]?.slug || "");
-  // come la trascrizione: il dispositivo va bene se il suo nome CONTIENE quanto salvato (es. "AirPods")
-  const disp = i.valori.MONITOR_DEVICE;
-  const trovato = disp ? i.dispositivi.find(d => d.toLowerCase().includes(disp.toLowerCase())) : "";
-  const opzioni = [...i.dispositivi];
-  if (disp && !trovato) opzioni.unshift(disp);
-  const scelto = trovato || disp;
   const chiave = (k, nome, link) => `
     <div class="campo">
       <label for="${k}">${nome} ${i.chiavi[k] ? '<span class="tag successo">Impostata</span>' : '<span class="tag pericolo">Mancante</span>'}</label>
@@ -1502,19 +1603,8 @@ async function vistaImpostazioni(query) {
             ${chiave("NVIDIA_API_KEY", "NVIDIA — riassunti e chat", "https://build.nvidia.com")}
           </div>
           <div class="c6">
-            <h3 class="card-titolo" style="margin-bottom:16px">Audio e riassunti</h3>
-            <div class="campo">
-              <label for="MONITOR_DEVICE">Cuffie</label>
-              <div class="campo-riga">
-                <select id="MONITOR_DEVICE">
-                  <option value="">Nessuno (non sentire la chiamata)</option>
-                  ${opzioni.map(d => `<option ${d === scelto ? "selected" : ""}>${esc(d)}</option>`).join("")}
-                </select>
-                <button class="btn" id="ricarica-disp" title="Rileggi i dispositivi collegati">Aggiorna</button>
-              </div>
-              ${i.errore_audio ? `<div class="aiuto" style="color:var(--danger-text)">Non riesco a leggere i dispositivi audio: ${esc(i.errore_audio)}</div>` : ""}
-              ${disp && !trovato ? `<div class="aiuto" style="color:var(--warning-text)">«${esc(disp)}» ora non è collegato.</div>` : ""}
-            </div>
+            <h3 class="card-titolo" style="margin-bottom:16px">Riassunti</h3>
+            <div class="aiuto" style="margin-bottom:16px">Microfono, audio del PC e lingua si scelgono per ogni progetto, nel pannello Trascrizione.</div>
             <div class="campo">
               <label for="RIASSUNTO_INTERVALLO_MINUTI">Riassunto ogni (minuti)</label>
               <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.valori.RIASSUNTO_INTERVALLO_MINUTI)}" placeholder="10" style="max-width:120px">
@@ -1538,11 +1628,10 @@ async function vistaImpostazioni(query) {
       </div>
     </div>`;
 
-  $("#ricarica-disp").onclick = () => naviga();
   const salva = async () => {
     const body = {
       chiavi: { GROQ_API_KEY: $("#GROQ_API_KEY").value, NVIDIA_API_KEY: $("#NVIDIA_API_KEY").value },
-      valori: { MONITOR_DEVICE: $("#MONITOR_DEVICE").value, RIASSUNTO_INTERVALLO_MINUTI: $("#RIASSUNTO_INTERVALLO_MINUTI").value },
+      valori: { RIASSUNTO_INTERVALLO_MINUTI: $("#RIASSUNTO_INTERVALLO_MINUTI").value },
     };
     try {
       // un solo Salva per tutto: impostazioni, contesto e glossario del progetto scelto

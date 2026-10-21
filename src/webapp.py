@@ -18,7 +18,7 @@ import subprocess
 import webbrowser
 from pathlib import Path
 
-from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi_ascolto
+from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("DASHBOARD_PORT", "8765"))
 URL = f"http://{HOST}:{PORT}"
@@ -39,7 +39,7 @@ from export_pdf import markdown_in_pdf
 
 SCRIPT = {"trascrizione": ROOT / "src" / "trascrittore.py", "riassunto": ROOT / "src" / "riassunto.py"}
 CHIAVI = ("GROQ_API_KEY", "NVIDIA_API_KEY")
-IMPOSTAZIONI = ("MONITOR_DEVICE", "RIASSUNTO_INTERVALLO_MINUTI")
+IMPOSTAZIONI = ("RIASSUNTO_INTERVALLO_MINUTI",)
 TIPI_CONFIG = ("contesto", "glossario")
 CODA_LOG_BYTE = 64 * 1024
 
@@ -237,8 +237,44 @@ def api_crea(dati: dict = Body(...)):
     if not nome:
         raise HTTPException(400, "Scrivi il nome del progetto.")
     if not contesto:
-        raise HTTPException(400, "Scrivi il contesto: di cosa parlano le chiamate di questo progetto.")
-    return {"slug": progetti.crea(nome, contesto, str(dati.get("glossario", "")))}
+        raise HTTPException(400, "Scrivi il contesto: di cosa parlano le sessioni di questo progetto.")
+    return {"slug": progetti.crea(nome, contesto, str(dati.get("glossario", "")), **impostazioni_audio(dati))}
+
+
+def impostazioni_audio(dati: dict) -> dict:
+    """Sorgente, dispositivo, lingua e salvataggio audio dal corpo della richiesta (solo quelli presenti)."""
+    audio = {}
+    if "sorgente" in dati:
+        if dati["sorgente"] not in progetti.SORGENTI:
+            raise HTTPException(400, "sorgente audio non valida")
+        audio["sorgente"] = dati["sorgente"]
+    if "lingua" in dati:
+        if dati["lingua"] not in progetti.LINGUE:
+            raise HTTPException(400, "lingua non valida")
+        audio["lingua"] = dati["lingua"]
+    if "dispositivo" in dati:
+        audio["dispositivo"] = str(dati["dispositivo"] or "").strip()
+    if "salva_audio" in dati:
+        audio["salva_audio"] = bool(dati["salva_audio"])
+    return audio
+
+
+@app.get("/api/dispositivi/{sorgente}")
+def api_dispositivi(sorgente: str):
+    """Microfoni o uscite (casse, cuffie) per la combobox, riletti a ogni richiesta."""
+    if sorgente not in progetti.SORGENTI:
+        raise HTTPException(404, "sorgente audio sconosciuta")
+    try:
+        return {**dispositivi(sorgente), "errore": None}
+    except Exception as exc:
+        return {"nomi": [], "predefinito": "", "errore": f"Non riesco a leggere i dispositivi audio: {exc}"}
+
+
+@app.get("/api/modelli-contesto/{tipo}")
+def api_modello_contesto(tipo: str):
+    if tipo not in progetti.TIPI_SESSIONE:
+        raise HTTPException(404, "tipo di sessione sconosciuto")
+    return {"testo": progetti.modello_contesto(tipo)}
 
 
 @app.patch("/api/progetti/{slug}")
@@ -250,7 +286,8 @@ def api_aggiorna(slug: str, dati: dict = Body(...)):
         raise HTTPException(400, "Il nome non può essere vuoto.")
     if stato not in (None, "attivo", "archiviato"):
         raise HTTPException(400, "stato non valido")
-    return progetti.aggiorna(slug, nome=str(nome).strip() if nome else None, stato=stato)
+    return progetti.aggiorna(slug, nome=str(nome).strip() if nome else None, stato=stato,
+                             **impostazioni_audio(dati))
 
 
 @app.get("/api/progetti/{slug}")
@@ -394,13 +431,20 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False):
         if altri:
             nome = progetti.leggi_info(altri[0].slug)["nome"]
             raise HTTPException(409, f"C'è già una trascrizione in corso su «{nome}»: fermala prima "
-                                     "di avviarne un'altra (l'audio della chiamata è uno solo).")
+                                     "di avviarne un'altra.")
         if not os.environ.get("GROQ_API_KEY"):
             raise HTTPException(400, "Manca la chiave Groq: inseriscila in Impostazioni.")
+        info = progetti.leggi_info(slug)
+        env = {"SORGENTE": info["sorgente"], "DISPOSITIVO": info["dispositivo"], "LINGUA": info["lingua"],
+               "SALVA_AUDIO": "1" if info["salva_audio"] else "0"}
+        if nuova:
+            env["NUOVA_SESSIONE"] = "1"
+        p.avvia(env)
+        return p.stato()
     elif not os.environ.get("NVIDIA_API_KEY"):
         raise HTTPException(400, "Manca la chiave NVIDIA: inseriscila in Impostazioni.")
     # la trascrizione continua l'ultima sessione; una nuova nasce solo dal bottone "Nuova sessione"
-    p.avvia({"NUOVA_SESSIONE": "1"} if tipo == "trascrizione" and nuova else {})
+    p.avvia({})
     return p.stato()
 
 
@@ -425,19 +469,9 @@ def api_log(slug: str, tipo: str, da: int = -1):
 
 @app.get("/api/impostazioni")
 def api_impostazioni():
-    try:
-        import sounddevice as sd
-        sd._terminate()          # rilegge i dispositivi (es. cuffie collegate dopo l'avvio)
-        sd._initialize()
-        dispositivi = [nome for _, nome in dispositivi_ascolto()]
-        errore_audio = None
-    except Exception as exc:
-        dispositivi, errore_audio = [], str(exc)
     return {
         "chiavi": {k: bool(os.environ.get(k)) for k in CHIAVI},
         "valori": {k: os.environ.get(k, "") for k in IMPOSTAZIONI},
-        "dispositivi": sorted(set(dispositivi)),
-        "errore_audio": errore_audio,
         "env_esiste": ENV_PATH.exists(),
     }
 

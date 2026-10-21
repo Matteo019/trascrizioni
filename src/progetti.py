@@ -1,13 +1,14 @@
 """
-Progetti: ogni corso/cliente ha la sua cartella in progetti/<slug>/ con contesto, glossario e output.
+Progetti: ogni corso, lezione o serie di video ha la sua cartella in progetti/<slug>/ con contesto, glossario e output.
 
-  progetto.json        nome, data di creazione, stato (attivo / archiviato)
+  progetto.json        nome, data di creazione, stato, sorgente audio e lingua
   contesto.txt         contesto per l'AI dei riassunti
   glossario.txt        termini tecnici per Whisper
   trascrizioni/        trascrizione_X.txt in scrittura
   riassunti/           Riassunto ... .md e Parti .../
   storico/             parte già riassunta, appunti, trascrizioni finite
   da_ritrascrivere/    audio dei blocchi non trascritti
+  audio/               registrazione intera delle sessioni da microfono (Opus)
   kanban.json          card del progetto (facoltativo)
 """
 
@@ -23,6 +24,10 @@ from comune import ROOT, CONFIG_DIR, PROGETTI_DIR, PROGETTO_PREDEFINITO
 
 SOTTOCARTELLE = ("trascrizioni", "riassunti", "storico", "da_ritrascrivere")
 FILE_CONFIG = ("contesto.txt", "glossario.txt")
+# sorgente audio e lingua della trascrizione, scelte per progetto
+SORGENTI = ("microfono", "pc")
+LINGUE = ("it", "en", "auto")
+TIPI_SESSIONE = ("riunione", "lezione", "video")
 SLUG_VALIDO = re.compile(r"^[a-z0-9_][a-z0-9_-]*$")
 MIGRAZIONE_ATTESA_SECONDI = 15 * 60
 
@@ -41,9 +46,13 @@ def cartella(slug: str) -> Path:
 def leggi_info(slug: str) -> dict:
     file_info = cartella(slug) / "progetto.json"
     info = json.loads(file_info.read_text(encoding="utf-8")) if file_info.exists() else {}
-    info.setdefault("nome", "Corso Panthera" if slug == PROGETTO_PREDEFINITO else slug)
+    info.setdefault("nome", "Generale" if slug == PROGETTO_PREDEFINITO else slug)
     info.setdefault("creato", datetime.datetime.now().isoformat(timespec="seconds"))
     info.setdefault("stato", "attivo")
+    info.setdefault("sorgente", "pc")
+    info.setdefault("dispositivo", "")       # vuoto = predefinito di Windows
+    info.setdefault("lingua", "it")
+    info.setdefault("salva_audio", False)
     return info
 
 
@@ -69,8 +78,16 @@ def assicura_progetto(slug: str, nome: str = "") -> Path:
     return base
 
 
-def crea(nome: str, contesto: str, glossario: str = "") -> str:
-    """Il contesto lo scrive sempre chi crea il progetto; il glossario è facoltativo."""
+def modello_contesto(tipo: str) -> str:
+    """Contesto di partenza per tipo di sessione (config/contesti/<tipo>.txt), da adattare."""
+    if tipo not in TIPI_SESSIONE:
+        return ""
+    path = CONFIG_DIR / "contesti" / f"{tipo}.txt"
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def crea(nome: str, contesto: str, glossario: str = "", **audio) -> str:
+    """Il contesto lo scrive sempre chi crea il progetto; glossario e impostazioni audio sono facoltativi."""
     base = slugify(nome)
     slug, n = base, 2
     while (PROGETTI_DIR / slug).exists():
@@ -78,6 +95,8 @@ def crea(nome: str, contesto: str, glossario: str = "") -> str:
     cartella_progetto = assicura_progetto(slug, nome.strip())
     (cartella_progetto / "contesto.txt").write_text(contesto.strip() + "\n", encoding="utf-8")
     (cartella_progetto / "glossario.txt").write_text(glossario.strip() + "\n" if glossario.strip() else "", encoding="utf-8")
+    if audio:
+        aggiorna(slug, **audio)
     return slug
 
 

@@ -13,7 +13,7 @@ Cartelle (dentro progetti/<slug>/):
 Uso (dalla cartella del progetto):
   python src/riassunto.py               controlla ogni INTERVALLO minuti finché non premi CTRL+C
   python src/riassunto.py --una-volta   elabora quello che c'è ed esce
-  --progetto <slug>                     progetto su cui lavorare (predefinito: corso-panthera)
+  --progetto <slug>                     progetto su cui lavorare (predefinito: generale)
 """
 
 import os

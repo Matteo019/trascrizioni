@@ -1,0 +1,15 @@
+TIPO DI SESSIONE
+Video (YouTube o altro) riprodotto sul PC, in italiano o in inglese. Argomento: [scrivi qui di cosa parla il video].
+
+OBIETTIVO DEL RIASSUNTO
+Appunti completi e ordinati per argomento di tutto ciò che il video spiega: concetti, passaggi,
+esempi, strumenti e link citati. Il riassunto va scritto in italiano anche se il video è in inglese;
+i termini tecnici restano nella lingua originale.
+
+COME È FATTA LA TRASCRIZIONE
+- È generata automaticamente dal riconoscimento vocale a blocchi: le frasi possono essere spezzate
+  tra un blocco e l'altro e non indica chi parla.
+- Se un termine è chiaramente sbagliato ma il senso è evidente, correggilo.
+
+COSA È RUMORE (va SEGNALATO, non ignorato)
+- Sigle, musica, sponsor e pubblicità, inviti a iscriversi o lasciare un like, saluti.
