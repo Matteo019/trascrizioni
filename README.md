@@ -54,16 +54,25 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 ## Uso
 
 1. Doppio clic su **`avvia_dashboard.bat`**: al primo avvio installa le dipendenze, poi apre
-   http://127.0.0.1:8765 nel browser.
-2. Nella home scegli **Microfono** o **Audio del PC**: scegli il dispositivo (predefinito di Windows
-   già selezionato), la lingua e il progetto (o creane uno nuovo, con il contesto già pronto), poi *Avvia*.
-   Ogni avvio dalla home è una sessione nuova con il suo riassunto.
-3. Nel progetto, il pannello **Trascrizione** ha le stesse scelte (valgono dal prossimo avvio),
+   http://127.0.0.1:8765 nel browser. Le chiavi (o un altro fornitore) si inseriscono in **Impostazioni**.
+2. **Home, niente in corso:** al centro ci sono i tasti **Microfono** e **Audio del PC**. Il pannello che si apre chiede:
+   - il **dispositivo** (il predefinito di Windows è già selezionato) e la **lingua**;
+   - il **progetto**: uno esistente dalla combobox, oppure *+ Nuovo progetto…* per crearlo al volo
+     (il contesto «lezione» o «video» è già compilato).
+
+   *Avvia* apre una **sessione nuova**, con il suo riassunto.
+3. **Home, trascrizione in corso:** i due tasti lasciano il posto alla barra della chat. A destra il riquadro
+   del log mostra le ultime frasi e gli eventuali errori, con **Ferma tutto** (trascrizione e riassunti, in modo ordinato).
+4. **Progetto e sessioni:** il **nome del progetto** lo scegli tu (un corso, una materia, una serie di video);
+   il **titolo di ogni sessione** lo genera l'AI dal riassunto e si può correggere in `riassunti/Parti …/titolo.txt`.
+5. Nel progetto, il pannello **Trascrizione** ha le stesse scelte (valgono dal prossimo avvio),
    *Continua sessione* / *Nuova sessione* e il log («Mostra log»). Apri **Riassunto** e premi *Avvia* per i riassunti.
-4. Al centro del progetto c'è il riassunto della sessione scelta; puoi passare a Trascrizione o Appunti,
+6. Al centro del progetto c'è il riassunto della sessione scelta; puoi passare a Trascrizione o Appunti,
    scorrere i passaggi **[INCERTO]**, scaricare il PDF o copiare il testo formattato.
-5. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
-6. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
+7. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
+8. **Archiviare:** nel progetto, menu **⋯** → *Archivia* (i file restano dove sono; *Ripristina* lo riporta).
+   Gli archiviati si vedono spuntando **archiviati (N)** nella riga dei progetti in home; non compaiono nella combobox di avvio.
+9. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
 
 ## Altri fornitori e AI locale (facoltativo)
 
