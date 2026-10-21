@@ -29,7 +29,7 @@ if sys.stdout is None or sys.stderr is None:
     sys.stdout = sys.stderr = _log
 
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import progetti
@@ -527,6 +527,26 @@ async def senza_cache(request, call_next):
     risposta = await call_next(request)
     risposta.headers["Cache-Control"] = "no-cache"
     return risposta
+
+
+HOST_AMMESSI = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+ORIGINI_AMMESSE = {f"http://{h}" for h in HOST_AMMESSI}
+
+
+@app.middleware("http")
+async def solo_dashboard(request, call_next):
+    """
+    Risponde solo alla dashboard stessa. Host diverso = un sito che si spaccia per 127.0.0.1
+    (DNS rebinding) per leggere i dati; Origin diversa = una pagina web qualsiasi che prova a mandare
+    comandi alla cieca (es. accendere il microfono). Senza Origin (curl, script locali) si lascia passare:
+    i browser la mandano sempre nelle richieste che cambiano qualcosa.
+    """
+    if request.headers.get("host", "") not in HOST_AMMESSI:
+        return JSONResponse({"detail": "Richiesta rifiutata: host non ammesso."}, status_code=403)
+    origine = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origine is not None and origine not in ORIGINI_AMMESSE:
+        return JSONResponse({"detail": "Richiesta rifiutata: arriva da un altro sito."}, status_code=403)
+    return await call_next(request)
 
 
 app.mount("/", StaticFiles(directory=ROOT / "web", html=True), name="web")
