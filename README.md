@@ -68,7 +68,9 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 5. Nel progetto, il pannello **Trascrizione** ha le stesse scelte (valgono dal prossimo avvio),
    *Continua sessione* / *Nuova sessione* e il log («Mostra log»). Apri **Riassunto** e premi *Avvia* per i riassunti.
 6. Al centro del progetto c'è il riassunto della sessione scelta; puoi passare a Trascrizione o Appunti,
-   scorrere i passaggi **[INCERTO]**, scaricare il PDF o copiare il testo formattato.
+   scorrere i passaggi **[INCERTO]**, scaricare il **PDF** o il **Markdown** (*Scarica MD*, comodo da importare
+   in Notion) o copiare il testo formattato. «in corso» compare solo sulla sessione che si sta registrando;
+   «da riassumere» sulle sessioni finite che il riassunto sta ancora completando.
 7. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
 8. **Archiviare:** nel progetto, menu **⋯** → *Archivia* (i file restano dove sono; *Ripristina* lo riporta).
    Gli archiviati si vedono spuntando **archiviati (N)** nella riga dei progetti in home; non compaiono nella combobox di avvio.

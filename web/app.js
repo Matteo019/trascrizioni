@@ -492,6 +492,7 @@ async function vistaProgetti(query) {
             <div class="b-azioni">
               <a class="btn primario piccolo" href="#/p/${enc(ultima.progetto)}/s/${ultima.nome}">Apri</a>
               <a class="btn piccolo" href="/api/progetti/${enc(ultima.progetto)}/sessioni/${ultima.nome}/pdf" target="_blank" rel="noopener">${ICONE_MENU.pdf} PDF</a>
+              <a class="btn piccolo" href="/api/progetti/${enc(ultima.progetto)}/sessioni/${ultima.nome}/md" download>MD</a>
               <a class="btn verde piccolo" href="#/chat?progetto=${enc(ultima.progetto)}&sessione=${ultima.nome}">Chat su questa sessione</a>
               ${ultima.qualita.totale ? `<span class="b-chiaro" title="Voci chiare nel riassunto"><strong>${percento(ultima.qualita.chiaro, ultima.qualita.totale)}</strong> chiaro</span>` : ""}
             </div>`
@@ -834,7 +835,8 @@ async function vistaProgetto(slug, nomeSessione, tab) {
             <a class="sessione-voce ${x.nome === nome ? "attiva" : ""}" href="${link(tab, x.nome)}">
               <span class="t">${esc(x.titolo || "Senza titolo")}</span>
               <span class="d">${data(x.inizio)}${x.ora_inizio ? ` · ${x.ora_inizio}` : ""}
-                ${x.in_corso ? '<span class="tag attesa vivo"><span class="punto"></span>in corso</span>' : ""}
+                ${x.in_corso ? '<span class="tag attesa vivo"><span class="punto"></span>in corso</span>'
+                  : x.da_riassumere ? '<span class="tag" title="Registrazione finita: il riassunto la sta completando">da riassumere</span>' : ""}
                 ${x.qualita.totale ? `<span class="num" style="margin-left:auto" title="Incerto">${percento(x.qualita.incerto, x.qualita.totale)}</span>` : ""}</span>
             </a>
             ${x.ha_riassunto || x.ha_appunti
@@ -863,6 +865,8 @@ async function vistaProgetto(slug, nomeSessione, tab) {
           <div class="piede-dx">
             ${pdf ? `<a class="btn primario grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/pdf" target="_blank" rel="noopener">Scarica PDF</a>`
                   : `<button class="btn primario grande" disabled title="Serve almeno il primo giro di appunti">Scarica PDF</button>`}
+            ${pdf ? `<a class="btn grande" href="/api/progetti/${enc(slug)}/sessioni/${nome}/md" download title="Il riassunto in Markdown, da importare in Notion o altrove">Scarica MD</a>`
+                  : `<button class="btn grande" disabled title="Serve almeno il primo giro di appunti">Scarica MD</button>`}
             <button class="btn grande" id="copia">Copia testo</button>
             <a class="btn verde grande" href="#/chat?progetto=${enc(slug)}&sessione=${nome}">Chat su questa sessione</a>
           </div>
@@ -922,7 +926,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
   else await schedaDocumento(slug, nome, tab, s);
 
   // sessione in corso: il riassunto si aggiorna da solo quando il riassuntore lo riscrive
-  if (s.in_corso && tab !== "trascrizione") {
+  if ((s.in_corso || s.da_riassumere) && tab !== "trascrizione") {
     let ultima = s.ultima_modifica;
     ogni(30000, async () => {
       try {

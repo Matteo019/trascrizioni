@@ -16,9 +16,10 @@ import datetime
 import threading
 import subprocess
 import webbrowser
+from urllib.parse import quote
 from pathlib import Path
 
-from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi
+from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi, pid_vivo
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("DASHBOARD_PORT", "8765"))
 URL = f"http://{HOST}:{PORT}"
@@ -50,25 +51,6 @@ app = FastAPI(title="Trascrizioni")
 # ---------------------------------------------------------------------------
 # Processi figli
 # ---------------------------------------------------------------------------
-
-def pid_vivo(pid: int) -> bool:
-    """Il processo esiste ancora? (su Windows senza ucciderlo: os.kill(pid, 0) lo termina)"""
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
-    import ctypes
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return False
-    codice = ctypes.c_ulong()
-    kernel32.GetExitCodeProcess(handle, ctypes.byref(codice))
-    kernel32.CloseHandle(handle)
-    return codice.value == 259                                # STILL_ACTIVE
-
 
 class Processo:
     def __init__(self, slug: str, tipo: str):
@@ -364,6 +346,21 @@ def api_pdf(slug: str, nome: str):
     nome_file = titolo.encode("ascii", "ignore").decode().replace('"', "") or nome
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{nome_file}.pdf"'})
+
+
+@app.get("/api/progetti/{slug}/sessioni/{nome}/md")
+def api_md(slug: str, nome: str):
+    """Lo stesso testo del PDF (riassunto, o appunti se manca) come file Markdown: si importa in Notion & co."""
+    verifica_sessione(slug, nome)
+    titolo, testo = sessioni.testo_per_pdf(slug, nome)
+    if not testo:
+        raise HTTPException(404, "Questa sessione non ha ancora né riassunto né appunti.")
+    nome_file = titolo.replace('"', "") or nome
+    # filename* tiene accenti e caratteri non ASCII del titolo; filename è il ripiego per i browser vecchi
+    ascii_ = nome_file.encode("ascii", "ignore").decode() or nome
+    return Response(testo.encode("utf-8"), media_type="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{ascii_}.md"; '
+                                                    f"filename*=UTF-8''{quote(nome_file)}.md"})
 
 
 @app.get("/api/calendario")

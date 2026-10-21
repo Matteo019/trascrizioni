@@ -31,7 +31,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from comune import argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc
+from comune import (argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc,
+                    FILE_SESSIONE_IN_SCRITTURA)
 import motori
 
 # ---------------------------------------------------------------------------
@@ -414,6 +415,9 @@ def main():
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
+    # la dashboard mostra «in corso» solo sulla sessione che si sta scrivendo davvero
+    segnalibro = PROGETTO_DIR / FILE_SESSIONE_IN_SCRITTURA
+    segnalibro.write_text(SESSION_NAME, encoding="utf-8")
     print("[INFO] Per i riassunti avvia a parte riassunto.py. Premi CTRL+C per fermare.\n")
     registrazione = Registrazione()
 
@@ -464,6 +468,7 @@ def main():
                 chunk, start = audio_queue.get()
                 trascrivi(chunk, start, transcript, attempts=2)
             registrazione.chiudi()
+            segnalibro.unlink(missing_ok=True)
             print(f"\n[INFO] Fermato. Trascrizione salvata in: {TRANSCRIPT_PATH}")
             if FAILED_DIR.exists() and any(FAILED_DIR.glob("*.wav")):
                 print(f"[INFO] Blocchi non trascritti in {FAILED_DIR}: verranno recuperati al prossimo avvio.")

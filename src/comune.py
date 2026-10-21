@@ -62,6 +62,48 @@ def path_progetto(slug: str) -> Path:
     return assicura_progetto(slug)
 
 
+def pid_vivo(pid: int) -> bool:
+    """Il processo esiste ancora? (su Windows senza ucciderlo: os.kill(pid, 0) lo termina)"""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    codice = ctypes.c_ulong()
+    kernel32.GetExitCodeProcess(handle, ctypes.byref(codice))
+    kernel32.CloseHandle(handle)
+    return codice.value == 259                                # STILL_ACTIVE
+
+
+# sessione che la trascrizione sta scrivendo: la scrive trascrittore.py all'avvio e la toglie all'uscita
+FILE_SESSIONE_IN_SCRITTURA = ".sessione_trascrizione"
+
+
+def sessione_in_scrittura(base: Path) -> str:
+    """
+    Nome della sessione che si sta registrando in questo progetto, "" se nessuna.
+    Il segnalibro da solo non basta (resta se il processo viene chiuso di colpo): con la dashboard
+    vale solo se il processo della trascrizione (.pid_trascrizione) è ancora vivo.
+    """
+    segnalibro, pid_file = base / FILE_SESSIONE_IN_SCRITTURA, base / ".pid_trascrizione"
+    try:
+        nome = segnalibro.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if pid_file.exists():
+        try:
+            return nome if pid_vivo(int(pid_file.read_text().strip())) else ""
+        except (OSError, ValueError):
+            return ""
+    return nome          # avviato da terminale, senza dashboard: ci si fida del segnalibro
+
+
 def stop_richiesto() -> bool:
     """La dashboard chiede la chiusura ordinata creando il file indicato in STOP_FILE."""
     stop_file = os.environ.get("STOP_FILE")

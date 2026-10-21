@@ -10,6 +10,7 @@ from pathlib import Path
 import markdown
 
 import progetti
+from comune import sessione_in_scrittura
 
 RIGA = re.compile(r"^\[(\d\d):(\d\d):(\d\d)( recuperato)?\]\s?(.*)$")
 INCERTO = "**[INCERTO]**"
@@ -89,13 +90,20 @@ def nomi_sessioni(base: Path) -> list:
 
 
 def file_sessione(base: Path, nome: str) -> dict:
+    """
+    in_corso: la trascrizione sta scrivendo proprio questa sessione (al massimo una per progetto).
+    da_riassumere: la registrazione è finita ma il file è ancora in trascrizioni/, finché il riassunto
+    non l'ha elaborata tutta e spostata in storico/.
+    """
     et = etichetta(nome)
     in_corso = base / "trascrizioni" / f"trascrizione_{nome}.txt"
+    in_scrittura = in_corso.exists() and sessione_in_scrittura(base) == nome
     riassunti = sorted((base / "riassunti").glob(f"Riassunto {et} - *.md")) if (base / "riassunti").exists() else []
     cartella_parti = base / "riassunti" / f"Parti {et}"
     return {
         "trascrizione": in_corso if in_corso.exists() else base / "storico" / f"trascrizione_{nome}.txt",
-        "in_corso": in_corso.exists(),
+        "in_corso": in_scrittura,
+        "da_riassumere": in_corso.exists() and not in_scrittura,
         "appunti": base / "storico" / f"Appunti {et}.md",
         "riassunto": riassunti[0] if riassunti else None,
         "parti": sorted(cartella_parti.glob("Parte *.md")) if cartella_parti.exists() else [],
@@ -125,6 +133,7 @@ def info_sessione(slug: str, nome: str) -> dict:
         "blocchi": len(righe),
         "non_trascritti": sum(1 for r in righe if r.group(5).startswith("[AUDIO NON TRASCRITTO")),
         "in_corso": f["in_corso"],
+        "da_riassumere": f["da_riassumere"],
         "ha_appunti": bool(appunti),
         "ha_riassunto": bool(riassunto),
         "parti": len(f["parti"]),
