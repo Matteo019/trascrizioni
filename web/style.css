@@ -295,7 +295,7 @@ a.tag:hover { text-decoration: none; filter: brightness(.97); }
 .cr-sorgente strong { font-size: 16px; }
 .cr-sorgente span { font-size: 13px; color: var(--ink-500); }
 dialog .campo[hidden] { display: none; }
-.motore .solo-locale[hidden] { display: none; }
+.motore .blocco-fornitore[hidden] { display: none; }
 .log {
   margin-top: var(--sp-3); background: var(--surface-2); border-radius: var(--radius-1);
   font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; color: var(--ink-700);

@@ -46,7 +46,7 @@ MAX_CARATTERI_PER_BLOCCO = 15000    # backlog lunghi vengono spezzati
 MAX_CARATTERI_PER_PARTE = 24000
 TIMEOUT_SECONDI = 300
 # Il servizio gratuito NVIDIA a volte rende un modello non disponibile (404): si passa al successivo.
-# Con l'AI locale c'è un solo modello, quello scelto nelle Impostazioni.
+# Con un altro fornitore (o l'AI locale) c'è un solo modello, quello scelto nelle Impostazioni.
 MODELLI = motori.modelli_testo([m.strip() for m in os.environ.get(
     "NEMOTRON_MODEL",
     # super-120b non è più disponibile sull'account (404); gpt-oss risponde in pochi secondi
@@ -143,7 +143,7 @@ def llm(client: OpenAI, prompt: str, max_tokens: int) -> str:
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.2,
-                    max_tokens=max_tokens,
+                    max_tokens=motori.max_token(max_tokens),
                 )
                 scelta = risposta.choices[0]
                 if scelta.finish_reason == "length":
@@ -376,8 +376,8 @@ def main():
         client = motori.client_testo(TIMEOUT_SECONDI)
     except RuntimeError as exc:
         sys.exit(str(exc))
-    if motori.testo_locale():
-        print(f"[INFO] AI locale: {motori.valore('LLM_LOCALE_MODELLO')} su {motori.valore('LLM_LOCALE_URL')}")
+    if not motori.testo_nvidia():
+        print(f"[INFO] Riassunti con {MOTORE}: {MODELLI[0]} su {motori.url_testo()}")
 
     STORICO_DIR.mkdir(parents=True, exist_ok=True)
     RIASSUNTI_DIR.mkdir(parents=True, exist_ok=True)

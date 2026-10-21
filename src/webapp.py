@@ -39,7 +39,7 @@ import chat
 from export_pdf import markdown_in_pdf
 
 SCRIPT = {"trascrizione": ROOT / "src" / "trascrittore.py", "riassunto": ROOT / "src" / "riassunto.py"}
-CHIAVI = ("GROQ_API_KEY", "NVIDIA_API_KEY")
+CHIAVI = motori.CHIAVI
 IMPOSTAZIONI = ("RIASSUNTO_INTERVALLO_MINUTI", *motori.IMPOSTAZIONI)
 TIPI_CONFIG = ("contesto", "glossario")
 CODA_LOG_BYTE = 64 * 1024
@@ -432,8 +432,10 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False):
             nome = progetti.leggi_info(altri[0].slug)["nome"]
             raise HTTPException(409, f"C'è già una trascrizione in corso su «{nome}»: fermala prima "
                                      "di avviarne un'altra.")
-        if not motori.trascrizione_locale() and not os.environ.get("GROQ_API_KEY"):
-            raise HTTPException(400, "Manca la chiave Groq: inseriscila in Impostazioni, oppure usa un Whisper locale.")
+        try:
+            motori.client_trascrizione()       # stesso controllo (chiave) che farà il processo
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc))
         info = progetti.leggi_info(slug)
         env = {"SORGENTE": info["sorgente"], "DISPOSITIVO": info["dispositivo"], "LINGUA": info["lingua"],
                "SALVA_AUDIO": "1" if info["salva_audio"] else "0"}
@@ -441,8 +443,11 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False):
             env["NUOVA_SESSIONE"] = "1"
         p.avvia(env)
         return p.stato()
-    elif not motori.testo_locale() and not os.environ.get("NVIDIA_API_KEY"):
-        raise HTTPException(400, "Manca la chiave NVIDIA: inseriscila in Impostazioni, oppure usa un'AI locale.")
+    else:
+        try:
+            motori.client_testo(5)             # chiave, indirizzo e modello del fornitore scelto
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc))
     # la trascrizione continua l'ultima sessione; una nuova nasce solo dal bottone "Nuova sessione"
     p.avvia({})
     return p.stato()
@@ -474,6 +479,7 @@ def api_impostazioni():
         # con l'AI locale le chiavi cloud non servono: niente allarme in home
         "chiavi_ok": all(os.environ.get(k) for k in motori.chiavi_necessarie()),
         "predefiniti": motori.PREDEFINITI,
+        "fornitori": motori.catalogo(),
         "valori": {k: os.environ.get(k, "") for k in IMPOSTAZIONI},
         "env_esiste": ENV_PATH.exists(),
     }
@@ -496,9 +502,9 @@ def api_salva_impostazioni(dati: dict = Body(...)):
             nuovi["RIASSUNTO_INTERVALLO_MINUTI"] = nuovi["RIASSUNTO_INTERVALLO_MINUTI"].replace(",", ".")
         except ValueError:
             raise HTTPException(400, "L'intervallo dei riassunti deve essere un numero di minuti maggiore di zero.")
-    if nuovi.get("AI_TRASCRIZIONE", "groq") not in ("", "groq", "locale") or nuovi.get("AI_TESTO", "nvidia") not in ("", "nvidia", "locale"):
+    if nuovi.get("AI_TRASCRIZIONE", "groq") not in ("", *motori.TRASCRIZIONE) or nuovi.get("AI_TESTO", "nvidia") not in ("", *motori.FORNITORI):
         raise HTTPException(400, "Scelta dell'AI non valida.")
-    for k in ("WHISPER_LOCALE_URL", "LLM_LOCALE_URL"):
+    for k in ("WHISPER_LOCALE_URL", "LLM_LOCALE_URL", "PERSONALIZZATO_URL"):
         if nuovi.get(k) and not nuovi[k].startswith(("http://", "https://")):
             raise HTTPException(400, "L'indirizzo dell'AI locale deve iniziare con http:// (es. http://localhost:11434/v1).")
     if not ENV_PATH.exists() and (ROOT / ".env.example").exists():

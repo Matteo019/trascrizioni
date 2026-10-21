@@ -70,7 +70,7 @@ SOGLIA_SILENZIO = SILENCE_RMS[SORGENTE]
 
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
 # quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
-# Con il Whisper locale c'è un solo modello, quello scelto nelle Impostazioni.
+# Con OpenAI o il Whisper locale c'è un solo modello, quello scelto nelle Impostazioni.
 WHISPER_MODELS = motori.modelli_trascrizione([m.strip() for m in os.environ.get(
     "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()])
 MOTORE = motori.nome_trascrizione()
@@ -409,8 +409,8 @@ def main():
         sys.exit(str(exc))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if motori.trascrizione_locale():
-        print(f"[INFO] Whisper locale: {WHISPER_MODELS[0]} su {motori.valore('WHISPER_LOCALE_URL')}")
+    if motori.fornitore_trascrizione() != "groq":
+        print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")

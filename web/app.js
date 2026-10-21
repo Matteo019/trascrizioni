@@ -1586,59 +1586,61 @@ async function vistaCalendario(query) {
 async function vistaImpostazioni(query) {
   const [i, progetti] = await Promise.all([api("/api/impostazioni"), api("/api/progetti")]);
   const progScelto = progetti.some(p => p.slug === query.get("progetto")) ? query.get("progetto") : (progetti[0]?.slug || "");
-  const chiave = (k, nome, link) => `
-    <div class="campo">
-      <label for="${k}">${nome} ${i.chiavi[k] ? '<span class="tag successo">Impostata</span>' : '<span class="tag pericolo">Mancante</span>'}</label>
-      <input type="password" id="${k}" autocomplete="off" placeholder="${i.chiavi[k] ? "••••••••  vuoto = non cambiare" : "Incolla la chiave"}">
-      <div class="aiuto"><a href="${link}" target="_blank" rel="noopener">${link.replace("https://", "")}</a></div>
-    </div>`;
-
-  // scelta cloud/locale: indirizzo e modello compaiono solo con «locale»
+  // ogni fornitore: indirizzo (endpoint), chiave e modello. I campi hanno data-v (impostazione) o
+  // data-chiave (API key): la stessa chiave può comparire in due blocchi (es. OpenAI per trascrizione e testo).
   const val = k => i.valori[k] || i.predefiniti?.[k] || "";
-  const motore = (k, nome, opzioni, kUrl, kModello, aiuto) => `
-    <div class="c6 motore" data-motore="${k}">
-      <div class="campo">
-        <label for="${k}">${nome}</label>
-        <select id="${k}">${opzioni.map(([v, n]) => `<option value="${v}" ${v === val(k) ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-      </div>
-      <div class="solo-locale" ${val(k) === "locale" ? "" : "hidden"}>
-        <div class="campo"><label for="${kUrl}">Indirizzo</label>
-          <input type="text" id="${kUrl}" value="${esc(val(kUrl))}" autocomplete="off"></div>
-        <div class="campo"><label for="${kModello}">Modello</label>
-          <input type="text" id="${kModello}" value="${esc(val(kModello))}" autocomplete="off">
-          <div class="aiuto">${esc(aiuto)}</div></div>
-      </div>
+  const F = i.fornitori;
+  const campoChiave = (k, sito, facoltativa = false) => `
+    <div class="campo">
+      <label>API key ${i.chiavi[k] ? '<span class="tag successo">Impostata</span>'
+        : facoltativa ? '<span class="tag">facoltativa</span>' : '<span class="tag pericolo">Mancante</span>'}</label>
+      <input type="password" data-chiave="${k}" autocomplete="off" aria-label="API key"
+        placeholder="${i.chiavi[k] ? "••••••••  vuoto = non cambiare" : "Incolla la chiave"}">
+      ${sito ? `<div class="aiuto"><a href="${sito}" target="_blank" rel="noopener">${sito.replace("https://", "")}</a></div>` : ""}
     </div>`;
+  const campoTesto = (k, nome, aiuto = "") => k ? `
+    <div class="campo">
+      <label>${nome}</label>
+      <input type="text" data-v="${k}" value="${esc(val(k))}" autocomplete="off" aria-label="${nome}"
+        placeholder="${esc(i.predefiniti?.[k] || "")}">
+      ${aiuto ? `<div class="aiuto">${esc(aiuto)}</div>` : ""}
+    </div>` : "";
+  const AIUTO_LOCALE = "Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1. Per i riassunti lunghi alza il contesto del modello ad almeno 16k (in Ollama: OLLAMA_CONTEXT_LENGTH=16384).";
+  const scelta = (k, titolo, voci, blocco) => `
+    <div class="c6 motore">
+      <h3 class="card-titolo" style="margin-bottom:16px">${titolo}</h3>
+      <div class="campo">
+        <label for="${k}">Fornitore</label>
+        <select id="${k}">${voci.map(v => `<option value="${v.id}" ${v.id === val(k) ? "selected" : ""}>${esc(v.nome)}${v.id === i.predefiniti[k] ? " — predefinito" : ""}</option>`).join("")}</select>
+      </div>
+      ${voci.map(v => `<div class="blocco-fornitore" data-per="${v.id}" ${v.id === val(k) ? "" : "hidden"}>${blocco(v)}</div>`).join("")}
+    </div>`;
+  const sezioneTrascrizione = scelta("AI_TRASCRIZIONE", "Trascrizione", F.trascrizione, v =>
+    v.id === "locale"
+      ? campoTesto("WHISPER_LOCALE_URL", "Indirizzo (endpoint)") +
+        campoTesto("WHISPER_LOCALE_MODELLO", "Modello", "Es. Speaches / faster-whisper-server. Sul solo processore un modello più piccolo (small, medium) è molto più veloce.")
+      : campoChiave(v.chiave, v.sito) + (v.id === "openai" ? campoTesto("MODELLO_TRASCRIZIONE_OPENAI", "Modello", "Es. whisper-1, gpt-4o-transcribe") : ""));
+  const sezioneTesto = scelta("AI_TESTO", "Riassunti e chat", F.testo, v =>
+    campoTesto(v.var_url, "Indirizzo (endpoint)", v.id === "locale" ? AIUTO_LOCALE
+      : v.id === "personalizzato" ? "Qualsiasi servizio con API compatibile OpenAI (…/v1)." : "") +
+    (v.chiave ? campoChiave(v.chiave, v.sito, v.chiave_facoltativa) : "") +
+    campoTesto(v.var_modello, "Modello", v.id === "personalizzato" ? "" : "Il nome consigliato si può cambiare: i fornitori aggiornano spesso i modelli.") +
+    (v.id === "nvidia" ? '<div class="aiuto">Usa diversi modelli gratuiti e passa da solo al successivo se uno è fermo.</div>' : ""));
 
   vista.innerHTML = `
     ${hero("Impostazioni")}
     <div class="sotto-hero">
       <div class="pannello riempi-max">
         <div class="pannello-corpo griglia scorre">
+          <div class="c12 aiuto" id="sezione-ai">Di base si usano Groq e NVIDIA (chiavi gratuite). Puoi scegliere un altro fornitore
+            (OpenAI, Gemini, Claude, DeepSeek, Mistral, OpenRouter), un'AI locale che gira sul PC (niente esce dal computer)
+            o qualsiasi indirizzo compatibile OpenAI. Microfono, audio del PC e lingua si scelgono per ogni progetto.</div>
+          ${sezioneTrascrizione}
+          ${sezioneTesto}
           <div class="c6">
-            <h3 class="card-titolo" style="margin-bottom:16px">Chiavi</h3>
-            ${chiave("GROQ_API_KEY", "Groq — trascrizione", "https://console.groq.com/keys")}
-            ${chiave("NVIDIA_API_KEY", "NVIDIA — riassunti e chat", "https://build.nvidia.com")}
-          </div>
-          <div class="c6">
-            <h3 class="card-titolo" style="margin-bottom:16px">Riassunti</h3>
-            <div class="aiuto" style="margin-bottom:16px">Microfono, audio del PC e lingua si scelgono per ogni progetto, nel pannello Trascrizione.</div>
             <div class="campo">
               <label for="RIASSUNTO_INTERVALLO_MINUTI">Riassunto ogni (minuti)</label>
               <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.valori.RIASSUNTO_INTERVALLO_MINUTI)}" placeholder="10" style="max-width:120px">
-            </div>
-          </div>
-          <div class="c12" id="sezione-ai">
-            <h3 class="card-titolo" style="margin-bottom:8px">AI locale <span class="tag">facoltativa</span></h3>
-            <div class="aiuto" style="margin-bottom:16px">Di base si usano Groq e NVIDIA con le chiavi qui sopra. Se preferisci che niente esca dal PC,
-              puoi usare programmi che girano sul tuo computer con un'API compatibile OpenAI.</div>
-            <div class="griglia">
-              ${motore("AI_TRASCRIZIONE", "Trascrizione", [["groq", "Groq con API key (predefinito)"], ["locale", "Whisper locale"]],
-                "WHISPER_LOCALE_URL", "WHISPER_LOCALE_MODELLO",
-                "Es. Speaches / faster-whisper-server. Sul solo processore un modello più piccolo (small, medium) è molto più veloce.")}
-              ${motore("AI_TESTO", "Riassunti e chat", [["nvidia", "NVIDIA con API key (predefinito)"], ["locale", "AI locale (Ollama, LM Studio…)"]],
-                "LLM_LOCALE_URL", "LLM_LOCALE_MODELLO",
-                "Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1. Per i riassunti lunghi alza il contesto del modello ad almeno 16k (in Ollama: OLLAMA_CONTEXT_LENGTH=16384).")}
             </div>
           </div>
           <div class="c12" id="sezione-contesto">
@@ -1661,9 +1663,12 @@ async function vistaImpostazioni(query) {
 
   const salva = async () => {
     const body = {
-      chiavi: { GROQ_API_KEY: $("#GROQ_API_KEY").value, NVIDIA_API_KEY: $("#NVIDIA_API_KEY").value },
-      valori: Object.fromEntries(["RIASSUNTO_INTERVALLO_MINUTI", "AI_TRASCRIZIONE", "WHISPER_LOCALE_URL", "WHISPER_LOCALE_MODELLO",
-        "AI_TESTO", "LLM_LOCALE_URL", "LLM_LOCALE_MODELLO"].map(k => [k, $(`#${k}`).value])),
+      // una chiave scritta in uno qualsiasi dei suoi campi; vuoto = non cambiare
+      chiavi: Object.fromEntries($$("[data-chiave]").filter(c => c.value.trim()).map(c => [c.dataset.chiave, c.value])),
+      valori: {
+        ...Object.fromEntries($$("[data-v]").map(c => [c.dataset.v, c.value])),
+        ...Object.fromEntries(["RIASSUNTO_INTERVALLO_MINUTI", "AI_TRASCRIZIONE", "AI_TESTO"].map(k => [k, $(`#${k}`).value])),
+      },
     };
     try {
       // un solo Salva per tutto: impostazioni, contesto e glossario del progetto scelto
@@ -1674,8 +1679,8 @@ async function vistaImpostazioni(query) {
     } catch (e) { toast(e.message, "errore"); }
   };
   $("#salva").onclick = salva;
-  $$(".motore select").forEach(s => s.onchange = () => {
-    s.closest(".motore").querySelector(".solo-locale").hidden = s.value !== "locale";
+  $$(".motore > .campo select").forEach(s => s.onchange = () => {
+    $$(".blocco-fornitore", s.closest(".motore")).forEach(b => b.hidden = b.dataset.per !== s.value);
   });
   let contesto = null;
   const caricaContesto = async slug => {

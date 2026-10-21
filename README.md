@@ -5,8 +5,8 @@ Trascrive in tempo reale **dal microfono del PC** (una lezione dal vivo) o **dal
 Tutto si gestisce da una dashboard nel browser, in locale: niente terminale, niente database.
 Progetto personale, fornito così com'è (licenza MIT), senza garanzie né supporto.
 
-- Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito, oppure Whisper locale
-- Riassunti e chat: modelli NVIDIA gratuiti, oppure un'AI locale (Ollama, LM Studio)
+- Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito, oppure OpenAI o un Whisper locale
+- Riassunti e chat: modelli NVIDIA gratuiti, oppure OpenAI, Gemini, Claude, DeepSeek, Mistral, OpenRouter, un'AI locale o qualsiasi endpoint compatibile OpenAI
 
 ## Le due modalità
 
@@ -65,20 +65,23 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 5. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
 6. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
 
-## AI locale (facoltativa)
+## Altri fornitori e AI locale (facoltativo)
 
-Di base si usano Groq e NVIDIA con le API key. In **Impostazioni → AI locale** puoi invece usare
-programmi che girano sul tuo PC: niente esce dal computer e le chiavi non servono.
-Trascrizione e riassunti si scelgono separatamente (es. Whisper locale e riassunti ancora su NVIDIA).
+Di base si usano Groq e NVIDIA, con chiavi gratuite. In **Impostazioni** scegli, separatamente per
+trascrizione e per riassunti e chat, un altro fornitore. Per ognuno ci sono **indirizzo (endpoint), API key e modello**:
+quelli dei fornitori pronti sono già compilati e si possono correggere.
 
-- **Riassunti e chat:** [Ollama](https://ollama.com) (`http://localhost:11434/v1`, es. `ollama pull qwen2.5:7b`)
-  oppure LM Studio (`http://localhost:1234/v1`). Per i riassunti lunghi alza il contesto del modello
-  ad almeno 16k token (Ollama: variabile `OLLAMA_CONTEXT_LENGTH=16384`).
-- **Trascrizione:** un server Whisper con API compatibile OpenAI, es. Speaches (ex faster-whisper-server,
-  `http://localhost:8000/v1`) o LocalAI. Con una scheda video NVIDIA `large-v3` va in tempo reale;
-  sul solo processore conviene un modello più piccolo (`small`, `medium`).
+| Riassunti e chat | Trascrizione |
+|---|---|
+| NVIDIA (predefinito), OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter | Groq (predefinito), OpenAI |
+| AI locale: Ollama (`http://localhost:11434/v1`), LM Studio (`http://localhost:1234/v1`) | Whisper locale (es. Speaches, `http://localhost:8000/v1`) |
+| Personalizzato: qualsiasi indirizzo compatibile OpenAI | |
 
-I modelli locali sono più lenti e di solito un po' meno precisi di quelli cloud, soprattutto sul solo processore.
+- Gemini, Claude e DeepSeek non offrono la trascrizione audio: per quella resta Groq, OpenAI o un Whisper locale.
+- I nomi dei modelli cambiano spesso: se un fornitore risponde «modello non trovato», correggilo nelle Impostazioni.
+- AI locale: niente esce dal PC e la chiave non serve. Per i riassunti lunghi alza il contesto del modello ad
+  almeno 16k token (Ollama: `OLLAMA_CONTEXT_LENGTH=16384`). Sul solo processore conviene un Whisper piccolo (`small`, `medium`).
+- Le chiavi restano in `.env` sul tuo PC (mai su git, mai rimandate al browser).
 
 ## Note
 

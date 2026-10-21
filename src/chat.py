@@ -1,6 +1,6 @@
 """
 Domande sui documenti dei progetti (riassunti, appunti, trascrizioni) con un modello NVIDIA a scelta
-o con l'AI locale scelta nelle Impostazioni.
+o con il fornitore scelto nelle Impostazioni (OpenAI, Gemini, Claude, AI locale...).
 Nessun indice: si scelgono i pezzi più pertinenti con un conteggio di parole, a ogni domanda.
 """
 
@@ -31,13 +31,15 @@ MODELLO_PREDEFINITO = MODELLI[0]["id"]
 
 
 def modelli() -> list:
-    """Modelli tra cui scegliere: quelli NVIDIA, oppure solo quello locale."""
-    if not motori.testo_locale():
+    """Modelli tra cui scegliere: quelli NVIDIA, oppure solo quello del fornitore scelto nelle Impostazioni."""
+    if motori.testo_nvidia():
         return MODELLI
-    nome = motori.valore("LLM_LOCALE_MODELLO")
-    return [{"id": nome, "nome": nome, "autore": "AI locale",
-             "descrizione": f"Gira sul tuo PC ({motori.valore('LLM_LOCALE_URL')}): i documenti non escono dal computer.",
-             "punti": ["Locale", "Privato"]}]
+    nome = motori.modello_testo()
+    if motori.testo_locale():
+        descrizione, punti = f"Gira sul tuo PC ({motori.url_testo()}): i documenti non escono dal computer.", ["Locale", "Privato"]
+    else:
+        descrizione, punti = f"Scelto nelle Impostazioni: risponde {motori.nome_testo()} con la tua chiave.", [motori.nome_testo()]
+    return [{"id": nome, "nome": nome, "autore": motori.nome_testo(), "descrizione": descrizione, "punti": punti}]
 
 
 def predefinito() -> str:
@@ -214,7 +216,7 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
 def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
              modello: str = "") -> dict:
     catalogo = modelli()
-    if motori.testo_locale():
+    if not motori.testo_nvidia():
         modello = catalogo[0]["id"]        # una chat aperta prima del cambio può ancora chiedere un modello NVIDIA
     modello = modello or catalogo[0]["id"]
     if modello not in {m["id"] for m in catalogo}:
@@ -276,16 +278,19 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
         _stato_modelli["stato"][prova] = False
         saltati.append(nomi[prova])
     if motori.testo_locale():
-        raise RuntimeError(f"L'AI locale ({motori.valore('LLM_LOCALE_URL')}) non ha risposto: è avviata e il modello "
+        raise RuntimeError(f"L'AI locale ({motori.url_testo()}) non ha risposto: è avviata e il modello "
                            f"«{modello}» è scaricato? Dettagli: " + "; ".join(motivi))
+    if not motori.testo_nvidia():
+        raise RuntimeError(f"{motori.nome_testo()} non ha risposto: controlla la chiave e il nome del modello "
+                           f"«{modello}» in Impostazioni. Dettagli: " + "; ".join(motivi))
     raise RuntimeError(f"Nessun modello NVIDIA ha risposto in {time.time() - avvio:.0f} s. Riprova tra poco. "
                        "Dettagli: " + "; ".join(motivi))
 
 
 def stato_modelli() -> dict:
     """Prova veloce di tutti i modelli in parallelo (risultato tenuto qualche minuto): {id: risponde?}."""
-    if motori.testo_locale():
-        return {}                # un solo modello: niente da scegliere, e la prova lo terrebbe occupato
+    if not motori.testo_nvidia():
+        return {}                # un solo modello: niente da scegliere, e la prova costerebbe una richiesta
     if time.time() - _stato_modelli["quando"] < DURATA_STATO_SECONDI and _stato_modelli["stato"]:
         return _stato_modelli["stato"]
     try:
