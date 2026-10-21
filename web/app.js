@@ -504,10 +504,7 @@ async function vistaProgetti(query) {
           <div class="b-saluto">
             <h2 class="b-saluto-testo">${saluto()}</h2>
             <p class="b-saluto-riga">${riepilogoOggi}</p>
-            <form class="b-aiuto" id="cr-chiedi">
-              <input type="text" id="cr-domanda" placeholder="Come ti posso aiutare?" aria-label="Come ti posso aiutare? Scrivi una domanda per la chat" autocomplete="off">
-              <button class="btn primario icona" aria-label="Invia alla chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
-            </form>
+            <div id="cr-centro"></div>
             ${ondeAudio()}
           </div>
         </section>
@@ -544,10 +541,35 @@ async function vistaProgetti(query) {
       </section>
     </div>`;
 
-  $("#cr-chiedi").onsubmit = e => {
-    e.preventDefault();
-    const d = $("#cr-domanda").value.trim();
-    location.hash = d ? `#/chat?${new URLSearchParams({ domanda: d })}` : "#/chat";
+  // al centro: senza trascrizione in corso i due tasti per iniziarla, durante la trascrizione la barra della chat
+  let centro = "";
+  const disegnaCentro = trascrive => {
+    const voluto = trascrive ? "chat" : "tasti";
+    const box = $("#cr-centro");
+    if (!box || centro === voluto) return;      // ridisegnare cancellerebbe una domanda a metà
+    centro = voluto;
+    if (trascrive) {
+      box.innerHTML = `
+        <form class="b-aiuto" id="cr-chiedi">
+          <input type="text" id="cr-domanda" placeholder="Come ti posso aiutare?" aria-label="Come ti posso aiutare? Scrivi una domanda per la chat" autocomplete="off">
+          <button class="btn primario icona" aria-label="Invia alla chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+        </form>`;
+      $("#cr-chiedi").onsubmit = e => {
+        e.preventDefault();
+        const d = $("#cr-domanda").value.trim();
+        location.hash = d ? `#/chat?${new URLSearchParams({ domanda: d })}` : "#/chat";
+      };
+    } else {
+      box.innerHTML = `
+        <div class="cr-sorgenti b-sorgenti" role="group" aria-label="Cosa vuoi trascrivere?">
+          ${[["microfono", "Microfono", "Lezione dal vivo"], ["pc", "Audio del PC", "YouTube, qualsiasi video"]].map(([k, nome, aiuto]) => `
+            <button class="cr-sorgente" data-sorgente="${k}" title="${aiuto}">
+              <span class="cr-icona-tondo" aria-hidden="true">${ICONE_SORGENTE[k]}</span><strong>${nome}</strong>
+            </button>`).join("")}
+        </div>`;
+      $$(".cr-sorgente", box).forEach(b => b.onclick = () => avvioRapido(b.dataset.sorgente, progetti));
+    }
+    window.effetti?.entrata(box.children);
   };
   window.effetti?.audioVivo($(".audio-barre"));
   $("#cr-cerca").onsubmit = e => {
@@ -598,21 +620,20 @@ async function vistaProgetti(query) {
     if (!box) return;
     const processi = (await api("/api/processi").catch(() => [])).filter(p => p.attivo);
     const trascr = processi.find(p => p.tipo === "trascrizione");
+    disegnaCentro(!!trascr);
     let html;
     if (!processi.length) {
       html = `
-        <div class="cr-tasto-testa"><span class="cr-icona b-spento">●</span><strong>Cosa vuoi trascrivere?</strong></div>
-        <div class="cr-sorgenti">
-          <button class="cr-sorgente" data-sorgente="microfono">${ICONE_SORGENTE.microfono}<strong>Microfono</strong><span>Lezione dal vivo</span></button>
-          <button class="cr-sorgente" data-sorgente="pc">${ICONE_SORGENTE.pc}<strong>Audio del PC</strong><span>YouTube, qualsiasi video</span></button>
-        </div>`;
+        <div class="cr-tasto-testa"><span class="cr-icona b-spento">●</span><strong>Niente in corso</strong></div>
+        <p class="secondario">Scegli Microfono o Audio del PC: qui vedrai la trascrizione in diretta.</p>`;
     } else {
       const p = trascr || processi[0];
       let frasi = [], avviso = "";
       if (trascr) {
         const log = await api(`/api/progetti/${enc(trascr.progetto)}/processi/trascrizione/log?da=-1`).catch(() => null);
         const righe = log?.righe || [];
-        frasi = righe.filter(r => /^\[\d\d:\d\d:\d\d/.test(r)).slice(-6);
+        // la riga "[hh:mm:ss] Avvio trascrizione" la scrive la dashboard: non è una frase trascritta
+        frasi = righe.filter(r => /^\[\d\d:\d\d:\d\d/.test(r) && !/\] Avvio \w+$/.test(r)).slice(-6);
         // ultimo messaggio di stato: un errore non seguito da "ripristinata" è un problema in corso
         const stato = righe.filter(r => /^\[(ERRORE|AUDIO|WARN)\]/.test(r)).pop() || "";
         if (/^\[(ERRORE|WARN)\]/.test(stato)) avviso = stato.replace(/^\[\w+\]\s*/, "");
@@ -634,7 +655,8 @@ async function vistaProgetti(query) {
         ${avviso ? `<div class="b-avviso" role="alert">${esc(avviso)}</div>` : ""}
         <div class="b-azioni">
           <a class="btn piccolo" href="#/p/${enc(p.progetto)}">Apri</a>
-          ${trascr ? `<button class="btn piccolo pericolo" id="cr-ferma">Ferma trascrizione</button>` : ""}
+          ${trascr && processi.length > 1 ? `<button class="btn piccolo" id="cr-ferma">Ferma trascrizione</button>` : ""}
+          <button class="btn piccolo pericolo" id="cr-ferma-tutto" title="Ferma trascrizione e riassunti in corso">Ferma tutto</button>
         </div>`;
     }
     if (html === ultimaFirma) return;        // niente cambiato: nessun ridisegno
@@ -645,7 +667,15 @@ async function vistaProgetti(query) {
     if (processi.length) box.dataset.href = `#/p/${enc((trascr || processi[0]).progetto)}`;
     box.innerHTML = html;
     if (nuove) window.effetti?.entrata(box.querySelectorAll(".b-frase:last-child"));
-    $$(".cr-sorgente", box).forEach(b => b.onclick = () => avvioRapido(b.dataset.sorgente, progetti));
+    $("#cr-ferma-tutto")?.addEventListener("click", async () => {
+      if (!await dialogo({ titolo: "Fermare tutto?", testo: "Trascrizione e riassunti si chiudono in modo ordinato: il blocco in corso viene trascritto e il riassunto elabora l'ultimo pezzo.", conferma: "Ferma tutto", pericolo: true })) return;
+      const esiti = await Promise.allSettled(processi.map(x =>
+        api(`/api/progetti/${enc(x.progetto)}/processi/${x.tipo}/ferma`, { method: "POST" })));
+      const falliti = esiti.filter(e => e.status === "rejected");
+      if (falliti.length) toast(falliti[0].reason.message, "errore");
+      else toast("Tutto si ferma a fine blocco");
+      aggiornaHeader(); aggiornaLive();
+    });
     $("#cr-ferma")?.addEventListener("click", async () => {
       if (!await dialogo({ titolo: "Fermare la trascrizione?", testo: "Viene trascritto anche il blocco in corso, poi si ferma.", conferma: "Ferma" })) return;
       try {
@@ -1643,20 +1673,20 @@ async function vistaImpostazioni(query) {
               <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.valori.RIASSUNTO_INTERVALLO_MINUTI)}" placeholder="10" style="max-width:120px">
             </div>
           </div>
-          <div class="c12" id="sezione-contesto">
+          ${progetti.length ? `<div class="c12" id="sezione-contesto">
             <div class="card-testa">
               <h3 class="card-titolo">Contesto dei progetti</h3>
               <select id="contesto-progetto" aria-label="Progetto">
                 ${progetti.map(p => `<option value="${esc(p.slug)}" ${p.slug === progScelto ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
               </select>
             </div>
-            <div id="contesto-box">${progetti.length ? "" : '<div class="secondario piccolo">Nessun progetto</div>'}</div>
-          </div>
+            <div id="contesto-box"></div>
+          </div>` : ""}
         </div>
         <div class="pannello-piede">
-          <button class="btn primario grande" id="salva">Salva</button>
-          <span class="spazio"></span>
           <button class="btn pericolo" id="chiudi">Chiudi dashboard</button>
+          <span class="spazio"></span>
+          <button class="btn primario grande" id="salva">Salva</button>
         </div>
       </div>
     </div>`;
@@ -1696,7 +1726,7 @@ async function vistaImpostazioni(query) {
   // Ctrl+S: come il bottone Salva, salva tutto
   salvaCorrente = salva;
   modificheAperte = () => !!contesto?.sporco();
-  if (query.get("progetto")) $("#sezione-contesto").scrollIntoView({ block: "start" });
+  if (query.get("progetto")) $("#sezione-contesto")?.scrollIntoView({ block: "start" });
   $("#chiudi").onclick = async () => {
     if (!await dialogo({ titolo: "Chiudere la dashboard?", testo: "Trascrizioni e riassunti in corso vengono fermati.", conferma: "Chiudi", pericolo: true })) return;
     await api("/api/chiudi", { method: "POST" }).catch(() => {});
