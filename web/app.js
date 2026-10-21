@@ -426,7 +426,8 @@ async function vistaProgetti(query) {
     .sort((a, b) => b.inizio.localeCompare(a.inizio));
   const conPdf = sessioni.filter(s => s.ha_riassunto || s.ha_appunti);
   const ultima = conPdf.find(s => s.ha_riassunto) || conPdf[0];
-  const chiaviOk = impostazioni ? Object.values(impostazioni.chiavi).every(Boolean) : true;
+  // con l'AI locale le chiavi cloud non servono: l'allarme guarda solo quelle necessarie
+  const chiaviOk = impostazioni ? (impostazioni.chiavi_ok ?? Object.values(impostazioni.chiavi).every(Boolean)) : true;
   const ultimoProgetto = visibili[0];
 
   // ultimi 7 giorni: minuti trascritti al giorno
@@ -1592,6 +1593,23 @@ async function vistaImpostazioni(query) {
       <div class="aiuto"><a href="${link}" target="_blank" rel="noopener">${link.replace("https://", "")}</a></div>
     </div>`;
 
+  // scelta cloud/locale: indirizzo e modello compaiono solo con «locale»
+  const val = k => i.valori[k] || i.predefiniti?.[k] || "";
+  const motore = (k, nome, opzioni, kUrl, kModello, aiuto) => `
+    <div class="c6 motore" data-motore="${k}">
+      <div class="campo">
+        <label for="${k}">${nome}</label>
+        <select id="${k}">${opzioni.map(([v, n]) => `<option value="${v}" ${v === val(k) ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      </div>
+      <div class="solo-locale" ${val(k) === "locale" ? "" : "hidden"}>
+        <div class="campo"><label for="${kUrl}">Indirizzo</label>
+          <input type="text" id="${kUrl}" value="${esc(val(kUrl))}" autocomplete="off"></div>
+        <div class="campo"><label for="${kModello}">Modello</label>
+          <input type="text" id="${kModello}" value="${esc(val(kModello))}" autocomplete="off">
+          <div class="aiuto">${esc(aiuto)}</div></div>
+      </div>
+    </div>`;
+
   vista.innerHTML = `
     ${hero("Impostazioni")}
     <div class="sotto-hero">
@@ -1608,6 +1626,19 @@ async function vistaImpostazioni(query) {
             <div class="campo">
               <label for="RIASSUNTO_INTERVALLO_MINUTI">Riassunto ogni (minuti)</label>
               <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.valori.RIASSUNTO_INTERVALLO_MINUTI)}" placeholder="10" style="max-width:120px">
+            </div>
+          </div>
+          <div class="c12" id="sezione-ai">
+            <h3 class="card-titolo" style="margin-bottom:8px">AI locale <span class="tag">facoltativa</span></h3>
+            <div class="aiuto" style="margin-bottom:16px">Di base si usano Groq e NVIDIA con le chiavi qui sopra. Se preferisci che niente esca dal PC,
+              puoi usare programmi che girano sul tuo computer con un'API compatibile OpenAI.</div>
+            <div class="griglia">
+              ${motore("AI_TRASCRIZIONE", "Trascrizione", [["groq", "Groq con API key (predefinito)"], ["locale", "Whisper locale"]],
+                "WHISPER_LOCALE_URL", "WHISPER_LOCALE_MODELLO",
+                "Es. Speaches / faster-whisper-server. Sul solo processore un modello più piccolo (small, medium) è molto più veloce.")}
+              ${motore("AI_TESTO", "Riassunti e chat", [["nvidia", "NVIDIA con API key (predefinito)"], ["locale", "AI locale (Ollama, LM Studio…)"]],
+                "LLM_LOCALE_URL", "LLM_LOCALE_MODELLO",
+                "Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1. Per i riassunti lunghi alza il contesto del modello ad almeno 16k (in Ollama: OLLAMA_CONTEXT_LENGTH=16384).")}
             </div>
           </div>
           <div class="c12" id="sezione-contesto">
@@ -1631,7 +1662,8 @@ async function vistaImpostazioni(query) {
   const salva = async () => {
     const body = {
       chiavi: { GROQ_API_KEY: $("#GROQ_API_KEY").value, NVIDIA_API_KEY: $("#NVIDIA_API_KEY").value },
-      valori: { RIASSUNTO_INTERVALLO_MINUTI: $("#RIASSUNTO_INTERVALLO_MINUTI").value },
+      valori: Object.fromEntries(["RIASSUNTO_INTERVALLO_MINUTI", "AI_TRASCRIZIONE", "WHISPER_LOCALE_URL", "WHISPER_LOCALE_MODELLO",
+        "AI_TESTO", "LLM_LOCALE_URL", "LLM_LOCALE_MODELLO"].map(k => [k, $(`#${k}`).value])),
     };
     try {
       // un solo Salva per tutto: impostazioni, contesto e glossario del progetto scelto
@@ -1642,6 +1674,9 @@ async function vistaImpostazioni(query) {
     } catch (e) { toast(e.message, "errore"); }
   };
   $("#salva").onclick = salva;
+  $$(".motore select").forEach(s => s.onchange = () => {
+    s.closest(".motore").querySelector(".solo-locale").hidden = s.value !== "locale";
+  });
   let contesto = null;
   const caricaContesto = async slug => {
     if (contesto?.sporco() && !confirm("Il contesto ha modifiche non salvate. Cambiare progetto senza salvarle?")) {

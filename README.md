@@ -3,9 +3,10 @@
 Trascrive in tempo reale **dal microfono del PC** (una lezione dal vivo) o **dall'audio del PC**
 (YouTube, qualsiasi video), in italiano o in inglese, e ne genera un riassunto in Markdown.
 Tutto si gestisce da una dashboard nel browser, in locale: niente terminale, niente database.
+Progetto personale, fornito così com'è (licenza MIT), senza garanzie né supporto.
 
-- Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito
-- Riassunti e chat: modelli NVIDIA gratuiti
+- Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito, oppure Whisper locale
+- Riassunti e chat: modelli NVIDIA gratuiti, oppure un'AI locale (Ollama, LM Studio)
 
 ## Le due modalità
 
@@ -63,6 +64,21 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
    scorrere i passaggi **[INCERTO]**, scaricare il PDF o copiare il testo formattato.
 5. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
 6. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
+
+## AI locale (facoltativa)
+
+Di base si usano Groq e NVIDIA con le API key. In **Impostazioni → AI locale** puoi invece usare
+programmi che girano sul tuo PC: niente esce dal computer e le chiavi non servono.
+Trascrizione e riassunti si scelgono separatamente (es. Whisper locale e riassunti ancora su NVIDIA).
+
+- **Riassunti e chat:** [Ollama](https://ollama.com) (`http://localhost:11434/v1`, es. `ollama pull qwen2.5:7b`)
+  oppure LM Studio (`http://localhost:1234/v1`). Per i riassunti lunghi alza il contesto del modello
+  ad almeno 16k token (Ollama: variabile `OLLAMA_CONTEXT_LENGTH=16384`).
+- **Trascrizione:** un server Whisper con API compatibile OpenAI, es. Speaches (ex faster-whisper-server,
+  `http://localhost:8000/v1`) o LocalAI. Con una scheda video NVIDIA `large-v3` va in tempo reale;
+  sul solo processore conviene un modello più piccolo (`small`, `medium`).
+
+I modelli locali sono più lenti e di solito un po' meno precisi di quelli cloud, soprattutto sul solo processore.
 
 ## Note
 

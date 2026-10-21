@@ -1,5 +1,6 @@
 """
-Domande sui documenti dei progetti (riassunti, appunti, trascrizioni) con un modello NVIDIA a scelta.
+Domande sui documenti dei progetti (riassunti, appunti, trascrizioni) con un modello NVIDIA a scelta
+o con l'AI locale scelta nelle Impostazioni.
 Nessun indice: si scelgono i pezzi più pertinenti con un conteggio di parole, a ogni domanda.
 """
 
@@ -9,8 +10,8 @@ import os
 import re
 import time
 
-from openai import OpenAI
 
+import motori
 import progetti
 import sessioni
 
@@ -27,6 +28,20 @@ MODELLI = [
      "punti": ["Massima qualità", "Più lento"]},
 ]
 MODELLO_PREDEFINITO = MODELLI[0]["id"]
+
+
+def modelli() -> list:
+    """Modelli tra cui scegliere: quelli NVIDIA, oppure solo quello locale."""
+    if not motori.testo_locale():
+        return MODELLI
+    nome = motori.valore("LLM_LOCALE_MODELLO")
+    return [{"id": nome, "nome": nome, "autore": "AI locale",
+             "descrizione": f"Gira sul tuo PC ({motori.valore('LLM_LOCALE_URL')}): i documenti non escono dal computer.",
+             "punti": ["Locale", "Privato"]}]
+
+
+def predefinito() -> str:
+    return modelli()[0]["id"]
 # al modello vanno solo le sezioni che servono: poche, brevi, e la risposta arriva in fretta
 MAX_CARATTERI_CONTESTO = 12000
 MAX_SEZIONI = 8
@@ -197,11 +212,12 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
 
 
 def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
-             modello: str = MODELLO_PREDEFINITO) -> dict:
-    api_key = os.environ.get("NVIDIA_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("Manca la chiave NVIDIA: inseriscila in Impostazioni.")
-    if modello not in {m["id"] for m in MODELLI}:
+             modello: str = "") -> dict:
+    catalogo = modelli()
+    if motori.testo_locale():
+        modello = catalogo[0]["id"]        # una chat aperta prima del cambio può ancora chiedere un modello NVIDIA
+    modello = modello or catalogo[0]["id"]
+    if modello not in {m["id"] for m in catalogo}:
         raise RuntimeError("Modello non disponibile: scegline uno dall'elenco.")
     # le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?")
     testo_ricerca = " ".join([m["testo"] for m in storico[-4:] if m.get("ruolo") == "utente"] + [domanda])
@@ -228,11 +244,12 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
                          "content": str(m.get("testo", ""))[:1500]})
     messaggi.append({"role": "user", "content": domanda})
 
-    client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,
-                    timeout=TIMEOUT_SECONDI, max_retries=0)
+    # un modello locale sul solo processore può essere lento: gli si lascia tutto il tempo massimo
+    timeout = TEMPO_MASSIMO_SECONDI if motori.testo_locale() else TIMEOUT_SECONDI
+    client = motori.client_testo(timeout)
     # prima il modello scelto, poi gli altri: se uno dei gratuiti è fermo risponde il successivo
-    ordine = [modello] + [m["id"] for m in MODELLI if m["id"] != modello]
-    nomi = {m["id"]: m["nome"] for m in MODELLI}
+    ordine = [modello] + [m["id"] for m in catalogo if m["id"] != modello]
+    nomi = {m["id"]: m["nome"] for m in catalogo}
     saltati, motivi = [], []
     avvio = time.time()
     for prova in ordine:
@@ -241,7 +258,7 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
             break
         inizio = time.time()
         try:
-            r = client.with_options(timeout=min(TIMEOUT_SECONDI, rimasti)).chat.completions.create(
+            r = client.with_options(timeout=min(timeout, rimasti)).chat.completions.create(
                 model=prova, messages=messaggi, temperature=0.2, max_tokens=3000)
             testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
             motivo = "risposta vuota"
@@ -258,19 +275,23 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
                     "secondi": round(time.time() - inizio), "saltati": saltati}
         _stato_modelli["stato"][prova] = False
         saltati.append(nomi[prova])
+    if motori.testo_locale():
+        raise RuntimeError(f"L'AI locale ({motori.valore('LLM_LOCALE_URL')}) non ha risposto: è avviata e il modello "
+                           f"«{modello}» è scaricato? Dettagli: " + "; ".join(motivi))
     raise RuntimeError(f"Nessun modello NVIDIA ha risposto in {time.time() - avvio:.0f} s. Riprova tra poco. "
                        "Dettagli: " + "; ".join(motivi))
 
 
 def stato_modelli() -> dict:
     """Prova veloce di tutti i modelli in parallelo (risultato tenuto qualche minuto): {id: risponde?}."""
+    if motori.testo_locale():
+        return {}                # un solo modello: niente da scegliere, e la prova lo terrebbe occupato
     if time.time() - _stato_modelli["quando"] < DURATA_STATO_SECONDI and _stato_modelli["stato"]:
         return _stato_modelli["stato"]
-    api_key = os.environ.get("NVIDIA_API_KEY", "")
-    if not api_key:
+    try:
+        client = motori.client_testo(TIMEOUT_PROVA_SECONDI)
+    except RuntimeError:
         return {}
-    client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,
-                    timeout=TIMEOUT_PROVA_SECONDI, max_retries=0)
 
     def prova(mid):
         try:

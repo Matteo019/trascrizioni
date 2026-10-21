@@ -30,9 +30,9 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from groq import Groq
 
 from comune import argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc
+import motori
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -70,8 +70,10 @@ SOGLIA_SILENZIO = SILENCE_RMS[SORGENTE]
 
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
 # quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
-WHISPER_MODELS = [m.strip() for m in os.environ.get(
-    "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()]
+# Con il Whisper locale c'è un solo modello, quello scelto nelle Impostazioni.
+WHISPER_MODELS = motori.modelli_trascrizione([m.strip() for m in os.environ.get(
+    "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()])
+MOTORE = motori.nome_trascrizione()
 
 # Frasi che Whisper "inventa" sul silenzio o sul rumore
 HALLUCINATIONS = {
@@ -120,8 +122,6 @@ TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
 FAILED_DIR = PROGETTO_DIR / "da_ritrascrivere"
 AUDIO_DIR = PROGETTO_DIR / "audio"
 GLOSSARIO_PATH = PROGETTO_DIR / "glossario.txt"
-
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
 stop_event = threading.Event()
@@ -331,13 +331,15 @@ def build_prompt(previous_text: str) -> str:
     return " ".join(p for p in (f"Termini: {glossary}." if glossary else "", tail) if p)
 
 
-def transcribe_wav(groq_client: Groq, wav: bytes, prompt: str, attempts: int):
+def transcribe_wav(groq_client, wav: bytes, prompt: str, attempts: int):
     """
-    Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq non risponde.
+    Restituisce il testo ("" se silenzio/allucinazione) oppure None se Groq (o il Whisper locale) non risponde.
     A ogni tentativo prova i modelli in ordine: se il primo fallisce passa subito al successivo.
     """
     # con LINGUA=auto la lingua non si passa: Whisper la riconosce da solo
     lingua = {"language": LANGUAGE} if LANGUAGE else {}
+    # il prompt si manda solo se c'è: i server locali non sempre accettano un campo vuoto
+    extra = {**lingua, **({"prompt": prompt} if prompt else {})}
     for attempt in range(attempts):
         for model in WHISPER_MODELS:
             try:
@@ -346,15 +348,14 @@ def transcribe_wav(groq_client: Groq, wav: bytes, prompt: str, attempts: int):
                     model=model,
                     response_format="text",
                     temperature=0.0,
-                    prompt=prompt or None,
-                    **lingua,
+                    **extra,
                 )
                 text = str(result).strip()
                 if inventato(text) or (prompt and text in prompt):
                     return ""
                 return text
             except Exception as exc:
-                print(f"[ERRORE Groq] {model}: {str(exc)[:200]}")
+                print(f"[ERRORE {MOTORE}] {model}: {str(exc)[:200]}")
         if attempt + 1 < attempts:
             wait = 5 * (attempt + 1)
             print(f"[INFO] Nessun modello Whisper disponibile, riprovo tra {wait}s")
@@ -373,7 +374,7 @@ def save_failed(wav: bytes, start: datetime.datetime) -> Path:
     return path
 
 
-def retry_failed(groq_client: Groq, transcript=None):
+def retry_failed(groq_client, transcript=None):
     """
     Ritrascrive i file in da_ritrascrivere/. Quelli di questa sessione finiscono nel file aperto,
     quelli di sessioni precedenti in coda alla loro trascrizione (riassunto.py li vedrà come testo nuovo).
@@ -402,11 +403,14 @@ def retry_failed(groq_client: Groq, transcript=None):
 # ---------------------------------------------------------------------------
 
 def main():
-    if not GROQ_API_KEY:
-        sys.exit("Manca GROQ_API_KEY: copia .env.example in .env e inserisci la tua chiave.")
+    try:
+        groq_client = motori.client_trascrizione()
+    except RuntimeError as exc:
+        sys.exit(str(exc))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    groq_client = Groq(api_key=GROQ_API_KEY)
+    if motori.trascrizione_locale():
+        print(f"[INFO] Whisper locale: {WHISPER_MODELS[0]} su {motori.valore('WHISPER_LOCALE_URL')}")
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")

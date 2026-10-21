@@ -28,6 +28,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from comune import argomento_progetto, path_progetto, stop_richiesto
+import motori
 
 def _intervallo_minuti():
     try:
@@ -45,11 +46,13 @@ MAX_CARATTERI_PER_BLOCCO = 15000    # backlog lunghi vengono spezzati
 MAX_CARATTERI_PER_PARTE = 24000
 TIMEOUT_SECONDI = 300
 # Il servizio gratuito NVIDIA a volte rende un modello non disponibile (404): si passa al successivo.
-MODELLI = [m.strip() for m in os.environ.get(
+# Con l'AI locale c'è un solo modello, quello scelto nelle Impostazioni.
+MODELLI = motori.modelli_testo([m.strip() for m in os.environ.get(
     "NEMOTRON_MODEL",
     # super-120b non è più disponibile sull'account (404); gpt-oss risponde in pochi secondi
     "nvidia/nemotron-3-ultra-550b-a55b,openai/gpt-oss-20b,nvidia/nemotron-3.5-lightning-30b-a3b",
-).split(",") if m.strip()]
+).split(",") if m.strip()])
+MOTORE = motori.nome_testo()
 
 PROGETTO_DIR = path_progetto(argomento_progetto())
 TRASCRIZIONI_DIR = PROGETTO_DIR / "trascrizioni"
@@ -151,11 +154,11 @@ def llm(client: OpenAI, prompt: str, max_tokens: int) -> str:
                 if testo:
                     print(f"           ok con {modello} in {time.time() - inizio:.0f}s")
                     return testo
-                print(f"[NVIDIA] {modello}: risposta vuota")
+                print(f"[{MOTORE}] {modello}: risposta vuota")
             except Exception as exc:
-                print(f"[NVIDIA] {modello} non disponibile ({time.time() - inizio:.0f}s): {str(exc)[:150]}")
+                print(f"[{MOTORE}] {modello} non disponibile ({time.time() - inizio:.0f}s): {str(exc)[:150]}")
         time.sleep(30 * (giro + 1))
-    raise RuntimeError("nessun modello NVIDIA ha risposto")
+    raise RuntimeError(f"nessun modello {MOTORE} ha risposto")
 
 
 def blocchi(testo: str):
@@ -369,11 +372,12 @@ def ciclo(client: OpenAI, forza: bool):
 
 
 def main():
-    api_key = os.environ.get("NVIDIA_API_KEY", "")
-    if not api_key:
-        sys.exit("Manca NVIDIA_API_KEY nel file .env (https://build.nvidia.com).")
-    client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,
-                    timeout=TIMEOUT_SECONDI, max_retries=0)
+    try:
+        client = motori.client_testo(TIMEOUT_SECONDI)
+    except RuntimeError as exc:
+        sys.exit(str(exc))
+    if motori.testo_locale():
+        print(f"[INFO] AI locale: {motori.valore('LLM_LOCALE_MODELLO')} su {motori.valore('LLM_LOCALE_URL')}")
 
     STORICO_DIR.mkdir(parents=True, exist_ok=True)
     RIASSUNTI_DIR.mkdir(parents=True, exist_ok=True)
