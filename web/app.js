@@ -874,6 +874,16 @@ async function vistaProgetto(slug, nomeSessione, tab) {
       </section>
     </div>`;
 
+  // elenco sessioni alto al massimo 3 righe: le altre scorrono, quella aperta resta in vista
+  const lista = $(".sessioni-lista");
+  if (lista && lista.children.length > 3) {
+    lista.classList.add("scorrevole");
+    const righe = lista.children;
+    lista.style.maxHeight = `${righe[2].offsetTop + righe[2].offsetHeight - righe[0].offsetTop}px`;
+    // si scorre solo l'elenco, non tutta la colonna (scrollIntoView sposterebbe anche quella)
+    const aperta = lista.querySelector(".attiva")?.closest(".sessione-riga");
+    if (aperta) lista.scrollTop = aperta.offsetTop - righe[0].offsetTop;
+  }
   $("#altro").onclick = () => { const m = $(".menu-altro-lista"); m.hidden = !m.hidden; };
   $("#apri").onclick = () => {
     $(".menu-altro-lista").hidden = true;
