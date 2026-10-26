@@ -336,7 +336,7 @@ dialog .campo[hidden] { display: none; }
 .sessioni-lista { display: flex; flex-direction: column; gap: 2px; }
 /* più di 3 sessioni: se ne vedono 3 e le altre scorrono (l'altezza esatta la calcola app.js) */
 .sessioni-lista.scorrevole { position: relative; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px;
-  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+  }
 .sessione-voce { display: block; padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-1); color: var(--ink-700); }
 .sessione-voce:hover { background: var(--surface-2); text-decoration: none; color: var(--ink-900); }
 .sessione-voce.attiva { background: var(--green-soft); color: var(--ink-900); }
@@ -1099,7 +1099,7 @@ body.home .header { display: none; }
 .b-titolo { font-family: var(--font-titoli); font-size: 22px; font-weight: 800; line-height: 1.2; color: var(--ink-900); letter-spacing: -.015em; }
 .b-titolo:hover { color: var(--green); text-decoration: none; }
 .b-anteprima {
-  flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0 calc(var(--sp-4) * -1); padding: 0 var(--sp-4);
+  flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 0 10px 0 0;
   -webkit-mask-image: linear-gradient(transparent, #000 14px, #000 calc(100% - 28px), transparent);
           mask-image: linear-gradient(transparent, #000 14px, #000 calc(100% - 28px), transparent);
 }
@@ -1338,3 +1338,12 @@ body.home .header { display: none; }
 .tema-in-cambio *, .tema-in-cambio *::before, .tema-in-cambio *::after {
   animation-play-state: paused !important; transition: none !important;
 }
+
+/* Barre di scorrimento uniformi in tutto il sito: sottili, arrotondate, senza frecce, tenute dentro le card; invisibili finché non ci si passa sopra */
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: transparent transparent; } .barra-visibile { scrollbar-color: var(--line-strong) transparent; } }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--pill); border: 2px solid transparent; background-clip: padding-box; }
+.barra-visibile::-webkit-scrollbar-thumb { background-color: var(--line-strong); }
+::-webkit-scrollbar-thumb:hover { background-color: var(--ink-700); }
+::-webkit-scrollbar-button, ::-webkit-scrollbar-corner { display: none; background: transparent; }

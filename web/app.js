@@ -306,6 +306,13 @@ async function naviga() {
   window.effetti?.dopoPagina(vista);
 }
 window.addEventListener("hashchange", naviga);
+/* barre di scorrimento visibili solo col mouse sopra: con :hover Chrome non le ridisegna all'uscita, con una classe sì */
+document.addEventListener("mouseover", e => {
+  $$(".barra-visibile").forEach(el => { if (!el.contains(e.target)) el.classList.remove("barra-visibile"); });
+  for (let el = e.target; el instanceof Element; el = el.parentElement)
+    if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth) el.classList.add("barra-visibile");
+});
+document.documentElement.addEventListener("mouseleave", () => $$(".barra-visibile").forEach(el => el.classList.remove("barra-visibile")));
 window.addEventListener("beforeunload", e => { if (modificheAperte()) { e.preventDefault(); e.returnValue = ""; } });
 
 const hero = (titolo, extra = "", sinistra = false) =>
@@ -1018,6 +1025,20 @@ function classeRiga(r) {
   return "";
 }
 
+/* trascrizione finita: il riassunto non aspetta il suo intervallo, finisce e si ferma da solo.
+   La fermata ordinata lascia finire il lavoro in corso, elabora l'ultimo pezzo e poi esce (nessun testo perso);
+   se il riassunto era fermo lo si avvia e gli si chiede subito la stessa fermata. */
+async function riassumiSubito(slug) {
+  try {
+    const r = (await api("/api/processi")).find(x => x.progetto === slug && x.tipo === "riassunto");
+    if (r?.in_chiusura) return;
+    const url = `/api/progetti/${enc(slug)}/processi/riassunto`;
+    if (!r?.attivo) await api(`${url}/avvia`, { method: "POST" });
+    await api(`${url}/ferma`, { method: "POST" });
+    toast("Trascrizione finita: il riassunto completa l'ultimo pezzo e poi si ferma");
+  } catch (e) { toast(`Riassunto non avviato: ${e.message}`, "errore"); }
+}
+
 function pannelloProcesso(slug, tipo, box, progetto = {}) {
   let offset = -1, stato = null, errori = 0, inCorso = false;
   const aperto = memoria(`aperto-${tipo}`) === "1";
@@ -1168,6 +1189,14 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
         if (inFondo || offset === -1) log.scrollTop = log.scrollHeight;
       }
       if (!log.childElementCount) log.innerHTML = `<div class="r-info">Nessun log</div>`;
+      // la chiusura ordinata del riassunto non scrive nulla dopo l'ultimo giro: si chiude qui il racconto
+      if (tipo === "riassunto" && !r.attivo && !r.codice_uscita && /Elaboro l'ultimo pezzo/.test(log.lastElementChild?.textContent || "")) {
+        const fine = document.createElement("div");
+        fine.className = "r-ok";
+        fine.textContent = "Fatto: riassunto completo, nessun pezzo rimasto. Riassunto fermato.";
+        log.appendChild(fine);
+        if (inFondo) log.scrollTop = log.scrollHeight;
+      }
       offset = r.offset;
       const eraAttivo = stato?.attivo;
       stato = r;
@@ -1175,6 +1204,10 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
       if (eraAttivo && !r.attivo) {
         toast(r.codice_uscita ? `${NOMI_TIPO[tipo]} terminato con errore: apri il log` : `${NOMI_TIPO[tipo]} fermato`, r.codice_uscita ? "errore" : "ok");
         aggiornaHeader();
+        if (tipo === "trascrizione" && !r.codice_uscita) riassumiSubito(slug);
+        // riassunto chiuso: le sessioni non sono più «da riassumere», si ridisegna la pagina
+        // (non se c'è un testo in modifica: andrebbe perso)
+        if (tipo === "riassunto" && !modificheAperte()) naviga();
       }
     } catch (e) { /* riprova al prossimo giro */ }
     inCorso = false;
