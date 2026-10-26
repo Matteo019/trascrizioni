@@ -1,0 +1,10 @@
+PyAudioWPatch==0.2.12.9
+soundfile==0.14.0
+groq==0.13.0
+openai==1.57.0
+numpy>=2.1
+fastapi==0.151.0
+uvicorn==0.54.0
+markdown==3.11.2
+xhtml2pdf==0.2.26
+faster-whisper==1.2.1
