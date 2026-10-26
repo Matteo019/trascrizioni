@@ -1,5 +1,6 @@
 PyAudioWPatch==0.2.12.9
 soundfile==0.14.0
+sounddevice==0.5.1
 groq==0.13.0
 openai==1.57.0
 numpy>=2.1

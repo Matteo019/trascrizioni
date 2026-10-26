@@ -159,6 +159,9 @@ def nome_dispositivo(info: dict) -> str:
 
 def dispositivi(sorgente: str) -> dict:
     """Nomi dei dispositivi per la combobox della dashboard e quello predefinito di Windows."""
+    if sorgente == "chiamata":           # qui si sceglie dove SENTIRE la chiamata
+        from chiamata import cuffie
+        return cuffie()
     import pyaudiowpatch as pa
     p = pa.PyAudio()                # un'istanza nuova vede anche i dispositivi appena collegati
     try:

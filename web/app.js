@@ -341,12 +341,42 @@ function etichettaTema() {
   $("#tema").setAttribute("aria-label", testo);
   $("#tema").title = testo;
 }
-$("#tema").addEventListener("click", () => {
-  const scuro = document.documentElement.dataset.theme !== "dark";
+function applicaTema(scuro) {
   if (scuro) document.documentElement.dataset.theme = "dark"; else delete document.documentElement.dataset.theme;
   memoria("tema", scuro ? "scuro" : "chiaro");
   etichettaTema();
-});
+}
+/* il cerchio dietro l'icona cresce (0,8 s) fino a coprire la pagina col tema nuovo:
+   il browser fotografa la pagina com'è, applica il tema e lo rivela dentro il cerchio */
+let temaInCambio = false;
+function cambiaTema(bottone) {
+  const scuro = document.documentElement.dataset.theme !== "dark";
+  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    applicaTema(scuro);
+    return;
+  }
+  if (temaInCambio) return;
+  temaInCambio = true;
+  const r = bottone.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const fine = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  // durante il cerchio la pagina nuova è «viva»: animazioni e sfumature di colore la farebbero
+  // ridisegnare tutta a ogni fotogramma (scatti). Si fermano solo per la durata del cambio.
+  document.documentElement.classList.add("tema-in-cambio");
+  const transizione = document.startViewTransition(() => applicaTema(scuro));
+  transizione.ready.then(() => {
+    document.documentElement.animate(
+      { clipPath: [`circle(${r.width / 2}px at ${x}px ${y}px)`, `circle(${fine}px at ${x}px ${y}px)`] },
+      { duration: 800, easing: "cubic-bezier(.33, 1, .68, 1)", pseudoElement: "::view-transition-new(root)" });
+  });
+  const fatto = () => {
+    temaInCambio = false;
+    document.documentElement.classList.remove("tema-in-cambio");
+  };
+  transizione.finished.finally(fatto);
+  setTimeout(fatto, 1500);      // finestra in background: il browser può non finire mai la transizione
+}
+$("#tema").addEventListener("click", e => cambiaTema(e.currentTarget));
 etichettaTema();
 
 document.addEventListener("keydown", e => {
@@ -578,8 +608,14 @@ async function vistaProgetti(query) {
     const q = $("#cr-cerca-testo").value.trim();
     if (q) location.hash = `#/cerca?q=${enc(q)}`;
   };
-  $("#cr-tema").onclick = () => $("#tema").click();
+  $("#cr-tema").onclick = e => cambiaTema(e.currentTarget);
   $("#nuovo").onclick = () => nuovoProgetto();
+  // riassunti e PDF: se ne vedono al massimo 3, gli altri scorrono (come l'elenco sessioni del progetto)
+  const pdf = $(".b-pdf .scorre");
+  if (pdf && pdf.children.length > 3) {
+    const righe = pdf.children;
+    pdf.style.maxHeight = `${righe[2].offsetTop + righe[2].offsetHeight - righe[0].offsetTop}px`;
+  }
   $("#archiviati")?.addEventListener("change", e => { location.hash = e.target.checked ? "#/?archiviati=1" : "#/"; });
 
   // ogni riquadro intero è cliccabile; link, bottoni e campi dentro mantengono la loro funzione
@@ -690,7 +726,8 @@ async function vistaProgetti(query) {
   ogni(4000, aggiornaLive);
 }
 
-const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (YouTube, video)"]];
+const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (YouTube, video)"],
+  ["chiamata", "Chiamata con cavo virtuale (PC aziendale)"]];
 const ICONE_SORGENTE = {
   microfono: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   pc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m10 8 4 2-4 2z"/></svg>',
@@ -1034,7 +1071,8 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
     // il dispositivo scelto vale per la sua sorgente: cambiando sorgente si riparte dal predefinito
     const caricaDispositivi = async scelto => {
       const mic = campo("sorgente").value === "microfono";
-      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono" : "Audio che esce da";
+      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono"
+        : campo("sorgente").value === "chiamata" ? "Sentila su (cuffie)" : "Audio che esce da";
       $(".solo-pc", sa).hidden = mic;
       $(".info-extra", box).textContent = mic ? "L'audio si salva anche, compresso" : "";
       const { opzioni, errore } = await opzioniDispositivo(campo("sorgente").value, scelto);

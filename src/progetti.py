@@ -25,7 +25,7 @@ from comune import ROOT, CONFIG_DIR, PROGETTI_DIR, PROGETTO_PREDEFINITO
 SOTTOCARTELLE = ("trascrizioni", "riassunti", "storico", "da_ritrascrivere")
 FILE_CONFIG = ("contesto.txt", "glossario.txt")
 # sorgente audio e lingua della trascrizione, scelte per progetto
-SORGENTI = ("microfono", "pc")
+SORGENTI = ("microfono", "pc", "chiamata")
 LINGUE = ("it", "en", "auto")
 TIPI_SESSIONE = ("riunione", "lezione", "video")
 SLUG_VALIDO = re.compile(r"^[a-z0-9_][a-z0-9_-]*$")

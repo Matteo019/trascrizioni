@@ -1132,7 +1132,7 @@ body.home .header { display: none; }
 .chip.piccolo { padding: 5px 12px; font-size: 12.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* riassunti e pdf */
-.b-pdf .scorre { margin: 0 calc(var(--sp-2) * -1); max-height: 42vh; }   /* tutti i PDF: oltre questa altezza scorrono */
+.b-pdf .scorre { margin: 0 calc(var(--sp-2) * -1); flex: 0 0 auto; overscroll-behavior: contain; }   /* altezza di 3 righe: la imposta app.js */
 
 /* settimana: numeri e mini grafico */
 .b-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
@@ -1331,3 +1331,10 @@ body.home .header { display: none; }
 
 /* home: saluto, casella chat e onde audio un po' più in basso */
 @media (min-width: 1200px) { .b-chat { padding-top: var(--sp-7); } }
+
+/* cambio tema: la pagina col tema nuovo entra dentro un cerchio animato da app.js (cambiaTema) */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { z-index: 2; }
+.tema-in-cambio *, .tema-in-cambio *::before, .tema-in-cambio *::after {
+  animation-play-state: paused !important; transition: none !important;
+}

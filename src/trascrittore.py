@@ -52,7 +52,7 @@ SAMPLE_RATE = 48000
 BLOCK = 1024
 WHISPER_RATE = 16000
 # l'audio del PC (digitale) e il microfono col docente lontano hanno volumi molto diversi
-SILENCE_RMS = {"pc": 300, "microfono": 30}
+SILENCE_RMS = {"pc": 300, "microfono": 30, "chiamata": 300}
 GUADAGNO_MAX = 8.0          # amplificazione massima dei blocchi a basso volume prima di Whisper
 SENZA_AUDIO_SECONDI = 5     # il microfono manda dati anche nel silenzio: se smette, la cattura è bloccata
 RIPROVA_SECONDI = 3
@@ -63,6 +63,8 @@ SORGENTE = os.environ.get("SORGENTE", "pc").strip().lower()
 if SORGENTE not in SILENCE_RMS:
     SORGENTE = "pc"
 DA_MICROFONO = SORGENTE == "microfono"
+# chiamata: VB-CABLE + ascolto in cuffia (PC aziendali); DISPOSITIVO sono le cuffie su cui sentirla
+DA_CHIAMATA = SORGENTE == "chiamata"
 DISPOSITIVO_HINT = os.environ.get("DISPOSITIVO", "").strip()
 # "it" anche per l'italiano pieno di termini inglesi: con "auto" Whisper sceglie una lingua per blocco
 # e a volte prende per inglese un blocco italiano, traducendolo.
@@ -158,6 +160,9 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
     Restituisce (stream, nome). Gli errori di apertura (dispositivo scollegato, bloccato da
     Windows o da un software di sicurezza) salgono a chi chiama con un messaggio leggibile.
     """
+    if DA_CHIAMATA:
+        from chiamata import apri_chiamata
+        return apri_chiamata(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
     apri = apri_microfono if DA_MICROFONO else apri_audio_pc
     return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
 
@@ -214,7 +219,7 @@ def capture_audio():
             stop_event.wait(RIPROVA_SECONDI)
             continue
         print(f"[AUDIO] {'Cattura da' if primo else 'Cattura ripristinata:'} {nome}"
-              f" ({'microfono' if DA_MICROFONO else 'audio del PC'}) · lingua: {LINGUA}")
+              f" ({'microfono' if DA_MICROFONO else 'chiamata, cavo virtuale' if DA_CHIAMATA else 'audio del PC'}) · lingua: {LINGUA}")
         primo = False
         ultimo_audio = time.time()
         try:
@@ -222,10 +227,11 @@ def capture_audio():
                 try:
                     data = raw.get(timeout=0.5)
                 except queue.Empty:
-                    if DA_MICROFONO:
+                    # microfono e cavo mandano dati anche nel silenzio: se smettono, la cattura è bloccata
+                    if DA_MICROFONO or DA_CHIAMATA:
                         if time.time() - ultimo_audio > SENZA_AUDIO_SECONDI:
-                            print(f"[ERRORE] Dal microfono non arriva più audio da {SENZA_AUDIO_SECONDI} s "
-                                  "(scollegato?): lo riapro.")
+                            print(f"[ERRORE] Dal {'cavo virtuale' if DA_CHIAMATA else 'microfono'} non arriva più "
+                                  f"audio da {SENZA_AUDIO_SECONDI} s: lo riapro.")
                             break
                     else:
                         for _ in range(int(0.5 * SAMPLE_RATE / BLOCK)):
