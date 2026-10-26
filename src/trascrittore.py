@@ -52,7 +52,7 @@ SAMPLE_RATE = 48000
 BLOCK = 1024
 WHISPER_RATE = 16000
 # l'audio del PC (digitale) e il microfono col docente lontano hanno volumi molto diversi
-SILENCE_RMS = {"pc": 300, "microfono": 120}
+SILENCE_RMS = {"pc": 300, "microfono": 30}
 GUADAGNO_MAX = 8.0          # amplificazione massima dei blocchi a basso volume prima di Whisper
 SENZA_AUDIO_SECONDI = 5     # il microfono manda dati anche nel silenzio: se smette, la cattura è bloccata
 RIPROVA_SECONDI = 3
