@@ -178,9 +178,16 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
         # ma lo stesso audio si legge dall'altro capo del cavo («CABLE Output»)
         if DA_MICROFONO or "cable" not in str(exc).lower():
             raise
-        from chiamata import apri_chiamata
-        stream, nome = apri_chiamata("", lambda data, rate: raw.put(in_stereo_48k(data, rate)))
-        print("[INFO] L'uscita audio di Windows è il cavo virtuale: leggo l'audio da «CABLE Output».")
+        from chiamata import apri_chiamata, cuffie
+        # lo si rimanda anche a casse o cuffie, altrimenti non si sente nulla: quelle scelte nella
+        # combobox se non sono il cavo, se no le prime cuffie trovate
+        nomi = cuffie()["nomi"]
+        ascolto = (DISPOSITIVO_HINT if DISPOSITIVO_HINT and "cable" not in DISPOSITIVO_HINT.lower()
+                   else next((n for n in nomi if re.search(r"cuffie|headphone|headset|airpods", n, re.I)),
+                             nomi[0] if nomi else ""))
+        stream, nome = apri_chiamata(ascolto, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+        print(f"[INFO] L'uscita audio di Windows è il cavo virtuale: leggo da «CABLE Output»"
+              f"{f' e lo faccio sentire su «{ascolto}»' if ascolto else ''}.")
         return stream, nome
 
 
