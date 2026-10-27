@@ -745,8 +745,11 @@ const TIPI_SESSIONE = [["", "Scrivo io il contesto"], ["lezione", "Lezione dal v
 /* opzioni della combobox: il predefinito di Windows per primo, quello salvato anche se ora è scollegato */
 async function opzioniDispositivo(sorgente, scelto = "") {
   const d = await api(`/api/dispositivi/${sorgente}`).catch(e => ({ nomi: [], predefinito: "", errore: e.message }));
-  const opzioni = [["", `Predefinito di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
-  if (scelto && !d.nomi.includes(scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
+  // CABLE Input = solo registrazione: l'audio va nel cavo e non lo si rimanda a nessuna cuffia
+  const nome = n => sorgente === "pc" && /cable/i.test(n) ? `${n} (solo registrazione, non si sente)` : n;
+  const opzioni = [["", `Predefinito di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, nome(n)])];
+  if (sorgente === "chiamata") opzioni.push(["__muto", "Nessuna: non la sento, solo registrazione"]);
+  if (scelto && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
   return { opzioni, errore: d.errore };
 }
 

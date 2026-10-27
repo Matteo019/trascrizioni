@@ -66,6 +66,7 @@ DA_MICROFONO = SORGENTE == "microfono"
 # chiamata: VB-CABLE + ascolto in cuffia (PC aziendali); DISPOSITIVO sono le cuffie su cui sentirla
 DA_CHIAMATA = SORGENTE == "chiamata"
 DISPOSITIVO_HINT = os.environ.get("DISPOSITIVO", "").strip()
+MUTO = "__muto"   # scelta «non la sento»: solo registrazione
 # "it" anche per l'italiano pieno di termini inglesi: con "auto" Whisper sceglie una lingua per blocco
 # e a volte prende per inglese un blocco italiano, traducendolo.
 LINGUA = os.environ.get("LINGUA", "it").strip().lower() or "it"
@@ -168,8 +169,11 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
     Windows o da un software di sicurezza) salgono a chi chiama con un messaggio leggibile.
     """
     if DA_CHIAMATA:
-        from chiamata import apri_chiamata
-        return apri_chiamata(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+        from chiamata import apri_chiamata, cuffie
+        # «non la sento» è una scelta, non un errore: nessun ascolto e nessun avviso
+        ascolto = ("" if DISPOSITIVO_HINT == MUTO
+                   else DISPOSITIVO_HINT or cuffie()["predefinito"])
+        return apri_chiamata(ascolto, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
     apri = apri_microfono if DA_MICROFONO else apri_audio_pc
     try:
         return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
@@ -179,15 +183,17 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
         if DA_MICROFONO or "cable" not in str(exc).lower():
             raise
         from chiamata import apri_chiamata, cuffie
-        # lo si rimanda anche a casse o cuffie, altrimenti non si sente nulla: quelle scelte nella
-        # combobox se non sono il cavo, se no le prime cuffie trovate
-        nomi = cuffie()["nomi"]
-        ascolto = (DISPOSITIVO_HINT if DISPOSITIVO_HINT and "cable" not in DISPOSITIVO_HINT.lower()
-                   else next((n for n in nomi if re.search(r"cuffie|headphone|headset|airpods", n, re.I)),
-                             nomi[0] if nomi else ""))
+        # dove rimandarlo per sentirlo: le casse/cuffie scelte nella combobox; scelto proprio il cavo
+        # = solo registrazione, non si sente nulla; predefinito = cuffie collegate, se non ce ne sono
+        # nessun ascolto (mai le casse senza che le si scelga)
+        if DISPOSITIVO_HINT:
+            ascolto = "" if "cable" in DISPOSITIVO_HINT.lower() or DISPOSITIVO_HINT == MUTO else DISPOSITIVO_HINT
+        else:
+            ascolto = next((n for n in cuffie()["nomi"]
+                            if re.search(r"cuffie|headphone|headset|airpods", n, re.I)), "")
         stream, nome = apri_chiamata(ascolto, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
         print(f"[INFO] L'uscita audio di Windows è il cavo virtuale: leggo da «CABLE Output»"
-              f"{f' e lo faccio sentire su «{ascolto}»' if ascolto else ''}.")
+              f"{f' e lo faccio sentire su «{ascolto}»' if ascolto else ' (solo registrazione, non lo faccio sentire)'}.")
         return stream, nome
 
 
