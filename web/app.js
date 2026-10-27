@@ -864,6 +864,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
               <button id="rinomina">Rinomina</button>
               <button id="contesto">Modifica contesto</button>
               <button id="archivia">${p.stato === "archiviato" ? "Ripristina" : "Archivia"}</button>
+              ${s && sessioni.length > 1 ? `<button id="unisci-sessione">Unisci con un'altra sessione</button>` : ""}
               ${s ? `<button id="elimina-sessione" class="testo-pericolo">Elimina questa sessione</button>` : ""}
               <button id="elimina-progetto" class="testo-pericolo">Elimina progetto</button>
             </div>
@@ -953,6 +954,20 @@ async function vistaProgetto(slug, nomeSessione, tab) {
       naviga();
     } catch (e) { toast(e.message, "errore"); }
   };
+  $("#unisci-sessione")?.addEventListener("click", async () => {
+    $(".menu-altro-lista").hidden = true;
+    const altre = sessioni.filter(x => x.nome !== nome)
+      .map(x => [x.nome, `${data(x.inizio)}${x.ora_inizio ? ` · ${x.ora_inizio}` : ""} — ${x.titolo || "Senza titolo"}`]);
+    const v = await dialogo({ titolo: "Unire due sessioni?",
+      testo: "Il testo finisce nella sessione più vecchia, in ordine di orario; l'altra va nel cestino. Il riassunto elabora il testo aggiunto al prossimo giro.",
+      campi: [{ id: "con", label: "Unisci con", opzioni: altre, valore: altre[0][0] }], conferma: "Unisci" });
+    if (!v) return;
+    try {
+      const r = await api(`/api/progetti/${enc(slug)}/sessioni/${enc(nome)}/unisci`, { method: "POST", body: { con: v.con } });
+      toast("Sessioni unite", "ok");
+      location.hash = `#/p/${enc(slug)}/s/${r.sessione}?tab=trascrizione`;
+    } catch (e) { toast(e.message, "errore"); }
+  });
   $("#elimina-sessione")?.addEventListener("click", async () => {
     $(".menu-altro-lista").hidden = true;
     if (!await dialogo({ titolo: "Eliminare la sessione?",
@@ -981,7 +996,7 @@ async function vistaProgetto(slug, nomeSessione, tab) {
     if (el) copiaFormattato(el); else toast("Niente da copiare in questa sessione");
   });
 
-  pannelloProcesso(slug, "trascrizione", $("#proc-trascrizione"), p);
+  pannelloProcesso(slug, "trascrizione", $("#proc-trascrizione"), p, nome);
   pannelloProcesso(slug, "riassunto", $("#proc-riassunto"));
   // un'unica card: il selettore sceglie quale dei due processi mostrare
   const mostraProcesso = tipo => {
@@ -1041,7 +1056,7 @@ async function riassumiSubito(slug) {
   } catch (e) { toast(`Riassunto non avviato: ${e.message}`, "errore"); }
 }
 
-function pannelloProcesso(slug, tipo, box, progetto = {}) {
+function pannelloProcesso(slug, tipo, box, progetto = {}, sessioneAperta = "") {
   let offset = -1, stato = null, errori = 0, inCorso = false;
   const aperto = memoria(`aperto-${tipo}`) === "1";
   const logVisibile = memoria(`log-${tipo}`) === "1";
@@ -1137,7 +1152,7 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
     if (bottoni.dataset.firma !== firma) {
       bottoni.dataset.firma = firma;
       if (!s.attivo) bottoni.innerHTML = tipo === "trascrizione"
-        ? `<button class="btn primario" data-a="avvia" title="Continua l'ultima sessione">Continua sessione</button>
+        ? `<button class="btn primario" data-a="avvia" title="Riprende a trascrivere nella sessione aperta qui">Continua sessione</button>
            <button class="btn" data-a="nuova" title="Inizia una sessione nuova con un riassunto suo">Nuova sessione</button>`
         : `<button class="btn primario" data-a="avvia">Avvia</button>`;
       else if (!s.in_chiusura) bottoni.innerHTML = `<button class="btn" data-a="ferma">Ferma</button>`;
@@ -1152,7 +1167,8 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
     e.target.disabled = true;
     try {
       if (a === "avvia" || a === "nuova") {
-        stato = await api(`${url}/avvia${a === "nuova" ? "?nuova=true" : ""}`, { method: "POST" });
+        const dove = a === "nuova" ? "?nuova=true" : sessioneAperta ? `?sessione=${enc(sessioneAperta)}` : "";
+        stato = await api(`${url}/avvia${dove}`, { method: "POST" });
         offset = -1; errori = 0; log.innerHTML = "";
         // si apre la sessione che si sta scrivendo, non quella che era a schermo
         if (stato.sessione) { location.hash = `#/p/${enc(slug)}/s/${stato.sessione}?tab=trascrizione`; aggiornaHeader(); return; }

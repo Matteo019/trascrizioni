@@ -313,6 +313,23 @@ def api_elimina_sessione(slug: str, nome: str):
     return {"cestino": str(destinazione)}
 
 
+@app.post("/api/progetti/{slug}/sessioni/{nome}/unisci")
+def api_unisci_sessioni(slug: str, nome: str, dati: dict = Body(...)):
+    verifica_slug(slug)
+    altra = str(dati.get("con") or "")
+    nomi = sessioni.nomi_sessioni(progetti.cartella(slug))
+    if nome not in nomi or altra not in nomi or altra == nome:
+        raise HTTPException(404, "Sessione non trovata.")
+    attivi = processi_attivi(slug)
+    if attivi:
+        raise HTTPException(409, f"Ferma prima {' e '.join(attivi)} di questo progetto.")
+    try:
+        rimasta = sessioni.unisci_sessioni(slug, nome, altra)
+    except OSError as exc:
+        raise HTTPException(409, f"Un file della sessione è ancora in uso, riprova tra poco ({exc.strerror}).")
+    return {"sessione": rimasta}
+
+
 @app.get("/api/progetti/{slug}")
 def api_progetto(slug: str):
     verifica_slug(slug)
@@ -458,7 +475,7 @@ def api_processi():
 
 
 @app.post("/api/progetti/{slug}/processi/{tipo}/avvia")
-def api_avvia(slug: str, tipo: str, nuova: bool = False):
+def api_avvia(slug: str, tipo: str, nuova: bool = False, sessione: str = ""):
     verifica_slug(slug)
     p = processo(slug, tipo)
     if p.attivo:
@@ -483,6 +500,11 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False):
             nome = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             (base / "trascrizioni").mkdir(parents=True, exist_ok=True)
             (base / "trascrizioni" / f"trascrizione_{nome}.txt").touch()
+        elif sessione:
+            # «Continua» sulla sessione aperta nella pagina, non per forza l'ultima
+            if sessione not in sessioni.nomi_sessioni(base):
+                raise HTTPException(404, "Sessione non trovata.")
+            nome = sessione
         else:
             nome = sessioni.nomi_sessioni(base)[0]
         env["NOME_SESSIONE"] = nome

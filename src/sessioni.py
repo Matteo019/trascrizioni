@@ -4,6 +4,7 @@ Tutto viene ricavato dai file a ogni richiesta (nessun indice): i volumi sono so
 """
 
 import re
+import shutil
 import datetime
 from pathlib import Path
 
@@ -121,6 +122,31 @@ def elimina_sessione(slug: str, nome: str) -> Path:
     if (base / "audio").exists():
         percorsi += sorted((base / "audio").glob(f"{nome}_*.ogg"))
     return progetti.nel_cestino(*[p for p in percorsi if p and p.exists()], nome=f"{slug} {etichetta(nome)}")
+
+
+def unisci_sessioni(slug: str, nome: str, altra: str) -> str:
+    """
+    Unisce due sessioni nella più vecchia: le righe dell'altra vanno in coda alla sua trascrizione
+    (la minuta le rimette in ordine di orario, il riassunto le elabora come testo nuovo), l'audio
+    salvato o da ritrascrivere passa a lei, il resto dell'altra va nel cestino. Restituisce la sessione rimasta.
+    """
+    base = progetti.cartella(slug)
+    tiene, toglie = sorted((nome, altra))
+    aperta = base / "trascrizioni" / f"trascrizione_{tiene}.txt"
+    archiviata = base / "storico" / f"trascrizione_{tiene}.txt"
+    if not aperta.exists() and archiviata.exists():
+        aperta.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(archiviata, aperta)
+    testo = leggi(file_sessione(base, toglie)["trascrizione"])
+    if testo.strip():
+        with open(aperta, "a", encoding="utf-8") as f:
+            f.write(testo if testo.endswith("\n") else testo + "\n")
+    for cartella, schema in (("da_ritrascrivere", "{}__*.wav"), ("audio", "{}_*.ogg")):
+        if (base / cartella).exists():
+            for p in (base / cartella).glob(schema.format(toglie)):
+                p.rename(p.with_name(tiene + p.name[len(toglie):]))
+    elimina_sessione(slug, toglie)
+    return tiene
 
 
 def leggi(path) -> str:
