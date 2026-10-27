@@ -788,9 +788,11 @@ async function avvioRapido(sorgente, progetti) {
   } catch (e) { toast(e.message, "errore"); return; }
   try {
     // ogni lezione o video è una sessione a sé, con il suo riassunto
-    await api(`/api/progetti/${enc(slug)}/processi/trascrizione/avvia?nuova=true`, { method: "POST" });
+    const r = await api(`/api/progetti/${enc(slug)}/processi/trascrizione/avvia?nuova=true`, { method: "POST" });
     toast("Trascrizione avviata", "ok");
     aggiornaHeader();
+    location.hash = `#/p/${enc(slug)}/s/${r.sessione}?tab=trascrizione`;
+    return;
   } catch (e) { toast(e.message, "errore"); }
   // anche se l'avvio non riesce si apre il progetto: le scelte sono salvate e lì si riprova
   location.hash = `#/p/${enc(slug)}?tab=trascrizione`;
@@ -1152,6 +1154,8 @@ function pannelloProcesso(slug, tipo, box, progetto = {}) {
       if (a === "avvia" || a === "nuova") {
         stato = await api(`${url}/avvia${a === "nuova" ? "?nuova=true" : ""}`, { method: "POST" });
         offset = -1; errori = 0; log.innerHTML = "";
+        // si apre la sessione che si sta scrivendo, non quella che era a schermo
+        if (stato.sessione) { location.hash = `#/p/${enc(slug)}/s/${stato.sessione}?tab=trascrizione`; aggiornaHeader(); return; }
       } else if (a === "ferma") {
         stato = await api(`${url}/ferma`, { method: "POST" });
         toast(tipo === "riassunto" ? "Il riassunto elabora l'ultimo pezzo e poi si ferma" : "La trascrizione si ferma a fine blocco");

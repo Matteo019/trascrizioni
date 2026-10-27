@@ -82,6 +82,40 @@ def path_progetto(slug: str) -> Path:
     return assicura_progetto(slug)
 
 
+def ora_creazione(pid: int) -> int:
+    """Istante di creazione del processo (Windows, FILETIME), 0 se non leggibile: distingue un PID riusato."""
+    if os.name != "nt":
+        return 0
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return 0
+    tempi = [ctypes.c_ulonglong() for _ in range(4)]
+    ok = kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in tempi])
+    kernel32.CloseHandle(handle)
+    return tempi[0].value if ok else 0
+
+
+def scrivi_pid(path: Path, pid: int):
+    path.write_text(f"{pid} {ora_creazione(pid)}")
+
+
+def leggi_pid(path: Path) -> int:
+    """PID dal file, 0 se il processo non c'è più o se Windows ha dato quel numero a un altro processo."""
+    try:
+        parti = path.read_text().split()
+        pid = int(parti[0])
+        creato = int(parti[1]) if len(parti) > 1 else 0
+    except (OSError, ValueError, IndexError):
+        return 0
+    if not pid_vivo(pid):
+        return 0
+    if creato and ora_creazione(pid) not in (0, creato):
+        return 0
+    return pid
+
+
 def pid_vivo(pid: int) -> bool:
     """Il processo esiste ancora? (su Windows senza ucciderlo: os.kill(pid, 0) lo termina)"""
     if os.name != "nt":
@@ -117,10 +151,7 @@ def sessione_in_scrittura(base: Path) -> str:
     except OSError:
         return ""
     if pid_file.exists():
-        try:
-            return nome if pid_vivo(int(pid_file.read_text().strip())) else ""
-        except (OSError, ValueError):
-            return ""
+        return nome if leggi_pid(pid_file) else ""
     return nome          # avviato da terminale, senza dashboard: ci si fida del segnalibro
 
 

@@ -123,8 +123,17 @@ def nel_cestino(*percorsi: Path, nome: str) -> Path:
     """
     destinazione = CESTINO_DIR / f"{datetime.datetime.now():%Y%m%d_%H%M%S} {nome}"
     destinazione.mkdir(parents=True, exist_ok=True)
-    for p in percorsi:
-        shutil.move(str(p), str(destinazione / p.name))
+    spostati = []
+    try:
+        for p in percorsi:
+            shutil.move(str(p), str(destinazione / p.name))
+            spostati.append(p)
+    except OSError:
+        # un file in uso (es. PDF aperto): si rimette a posto quanto già spostato, tutto o niente
+        for p in reversed(spostati):
+            shutil.move(str(destinazione / p.name), str(p))
+        shutil.rmtree(destinazione, ignore_errors=True)
+        raise
     return destinazione
 
 

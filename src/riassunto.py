@@ -27,7 +27,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from comune import argomento_progetto, path_progetto, stop_richiesto
+from comune import argomento_progetto, path_progetto, stop_richiesto, sessione_in_scrittura
 import motori
 
 def _intervallo_minuti():
@@ -351,6 +351,9 @@ def archivia_se_finita(trascrizione: Path, storico: Path):
     (al posto della copia identica). Windows non permette di spostare un file che trascrittore.py
     tiene ancora aperto: in quel caso si riprova al giro successivo.
     """
+    # la sessione che la trascrizione sta usando non si tocca, anche se il file non è ancora aperto
+    if sessione_in_scrittura(trascrizione.parent.parent) == trascrizione.stem.removeprefix("trascrizione_"):
+        return
     try:
         if trascrizione.stat().st_size == 0:
             trascrizione.unlink()

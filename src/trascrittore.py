@@ -112,6 +112,13 @@ def sessione_da_usare() -> str:
     Se l'ultima era già stata archiviata in storico/ se ne rimette una copia in trascrizioni/:
     la copia in storico resta come segnalibro del riassunto, che riparte dal testo nuovo.
     """
+    if os.environ.get("NOME_SESSIONE"):           # scelta dalla dashboard
+        nome = os.environ["NOME_SESSIONE"]
+        aperta, archiviata = OUT_DIR / f"trascrizione_{nome}.txt", STORICO_DIR / f"trascrizione_{nome}.txt"
+        if not aperta.exists() and archiviata.exists():
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(archiviata, aperta)
+        return nome
     if os.environ.get("NUOVA_SESSIONE") != "1":
         nomi = {f.stem.removeprefix("trascrizione_")
                 for cartella in (OUT_DIR, STORICO_DIR) if cartella.exists()
@@ -405,7 +412,10 @@ def retry_failed(groq_client, transcript=None):
                 transcript.write(line)
                 transcript.flush()
             else:
-                with open(OUT_DIR / f"trascrizione_{session}.txt", "a", encoding="utf-8") as f:
+                aperta, archiviata = OUT_DIR / f"trascrizione_{session}.txt", STORICO_DIR / f"trascrizione_{session}.txt"
+                if not aperta.exists() and archiviata.exists():   # si riapre la copia intera, non un file nuovo
+                    shutil.copy2(archiviata, aperta)
+                with open(aperta, "a", encoding="utf-8") as f:
                     f.write(line)
             print(line.rstrip())
         path.unlink()
@@ -422,14 +432,15 @@ def main():
         sys.exit(str(exc))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # la dashboard mostra «in corso» solo sulla sessione che si sta scrivendo davvero; scritto subito,
+    # così il riassunto non archivia né cancella il file prima che venga aperto
+    segnalibro = PROGETTO_DIR / FILE_SESSIONE_IN_SCRITTURA
+    segnalibro.write_text(SESSION_NAME, encoding="utf-8")
     if motori.fornitore_trascrizione() != "groq":
         print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
-    # la dashboard mostra «in corso» solo sulla sessione che si sta scrivendo davvero
-    segnalibro = PROGETTO_DIR / FILE_SESSIONE_IN_SCRITTURA
-    segnalibro.write_text(SESSION_NAME, encoding="utf-8")
     print("[INFO] Per i riassunti avvia a parte riassunto.py. Premi CTRL+C per fermare.\n")
     registrazione = Registrazione()
 

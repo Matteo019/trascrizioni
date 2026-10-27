@@ -19,7 +19,7 @@ import webbrowser
 from urllib.parse import quote
 from pathlib import Path
 
-from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi, pid_vivo
+from comune import ROOT, ENV_PATH, scrivi_dotenv, dispositivi, pid_vivo, leggi_pid, scrivi_pid, sessione_in_scrittura
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("DASHBOARD_PORT", "8765"))
 URL = f"http://{HOST}:{PORT}"
@@ -65,11 +65,8 @@ class Processo:
         self.avviato = None
         self.stop_chiesto = self.ucciso = False
         if self.pid_file.exists():
-            try:
-                pid = int(self.pid_file.read_text().strip())
-            except ValueError:
-                pid = 0
-            if pid and pid_vivo(pid):
+            pid = leggi_pid(self.pid_file)
+            if pid:
                 self.pid = pid
                 self.avviato = datetime.datetime.fromtimestamp(self.pid_file.stat().st_mtime)
                 self.stop_chiesto = self.stop_file.exists()
@@ -91,7 +88,7 @@ class Processo:
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         log.close()
         self.pid = self.popen.pid
-        self.pid_file.write_text(str(self.pid))
+        scrivi_pid(self.pid_file, self.pid)
         self.avviato = datetime.datetime.now()
         self.stop_chiesto = self.ucciso = False
 
@@ -274,8 +271,13 @@ def api_aggiorna(slug: str, dati: dict = Body(...)):
                              **impostazioni_audio(dati))
 
 
-def processi_attivi(slug: str) -> list:
-    return [NOMI_PROCESSO.get(p.tipo, p.tipo) for (s, _), p in list(PROCESSI.items()) if s == slug and p.attivo]
+def processi_attivi(slug: str, sessione: str = "") -> list:
+    attivi = [NOMI_PROCESSO.get(p.tipo, p.tipo) for (s, _), p in list(PROCESSI.items()) if s == slug and p.attivo]
+    # una trascrizione avviata da terminale la dashboard non la vede tra i suoi processi, ma lascia il segnalibro
+    in_scrittura = sessione_in_scrittura(progetti.cartella(slug))
+    if "la trascrizione" not in attivi and in_scrittura and (not sessione or in_scrittura == sessione):
+        attivi.append("la trascrizione (avviata da terminale)")
+    return attivi
 
 
 @app.delete("/api/progetti/{slug}")
@@ -301,7 +303,7 @@ def api_elimina_sessione(slug: str, nome: str):
     if nome not in sessioni.nomi_sessioni(base):
         raise HTTPException(404, "Sessione non trovata.")
     # trascrittore e riassuntore lavorano sulle sessioni del progetto: si ferma prima chi è attivo
-    attivi = processi_attivi(slug)
+    attivi = processi_attivi(slug, nome)
     if attivi:
         raise HTTPException(409, f"Ferma prima {' e '.join(attivi)} di questo progetto.")
     try:
@@ -474,10 +476,18 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False):
         info = progetti.leggi_info(slug)
         env = {"SORGENTE": info["sorgente"], "DISPOSITIVO": info["dispositivo"], "LINGUA": info["lingua"],
                "SALVA_AUDIO": "1" if info["salva_audio"] else "0"}
-        if nuova:
-            env["NUOVA_SESSIONE"] = "1"
+        # la sessione la decide la dashboard e il file nasce subito: la pagina può aprirla
+        # senza aspettare il processo (prima restava sulla sessione vecchia)
+        base = progetti.cartella(slug)
+        if nuova or not sessioni.nomi_sessioni(base):
+            nome = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            (base / "trascrizioni").mkdir(parents=True, exist_ok=True)
+            (base / "trascrizioni" / f"trascrizione_{nome}.txt").touch()
+        else:
+            nome = sessioni.nomi_sessioni(base)[0]
+        env["NOME_SESSIONE"] = nome
         p.avvia(env)
-        return p.stato()
+        return {**p.stato(), "sessione": nome}
     else:
         try:
             motori.client_testo(5)             # chiave, indirizzo e modello del fornitore scelto
