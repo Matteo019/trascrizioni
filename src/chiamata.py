@@ -84,6 +84,8 @@ class Ascolto:
         self.apri()
 
     def apri(self):
+        if not self.hint:                  # nessuna cuffia scelta: solo trascrizione, nessun avviso
+            return
         self.prossimo_tentativo = time.time() + RIPROVA_CUFFIE_SECONDI
         idx = _trova_cuffie(self.sd, self.hint)
         if idx is None:

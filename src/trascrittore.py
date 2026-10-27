@@ -171,7 +171,17 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
         from chiamata import apri_chiamata
         return apri_chiamata(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
     apri = apri_microfono if DA_MICROFONO else apri_audio_pc
-    return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+    try:
+        return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+    except RuntimeError as exc:
+        # uscita di Windows sul cavo virtuale («CABLE Input»): il suo loopback spesso non si apre,
+        # ma lo stesso audio si legge dall'altro capo del cavo («CABLE Output»)
+        if DA_MICROFONO or "cable" not in str(exc).lower():
+            raise
+        from chiamata import apri_chiamata
+        stream, nome = apri_chiamata("", lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+        print("[INFO] L'uscita audio di Windows è il cavo virtuale: leggo l'audio da «CABLE Output».")
+        return stream, nome
 
 
 def block_rms(data: np.ndarray) -> float:
