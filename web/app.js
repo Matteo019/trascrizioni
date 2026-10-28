@@ -735,8 +735,8 @@ async function vistaProgetti(query) {
   ogni(4000, aggiornaLive);
 }
 
-const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (YouTube, video)"],
-  ["chiamata", "Chiamata con cavo virtuale (PC aziendale)"]];
+// «chiamata» (cavo virtuale) non si sceglie più: l'audio del PC passa dal cavo da solo se serve
+const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (video, Teams, YouTube)"]];
 const ICONE_SORGENTE = {
   microfono: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 17v-5l4-1v5"/><circle cx="9" cy="17" r="1"/><circle cx="13" cy="16" r="1"/></svg>',
@@ -745,22 +745,33 @@ const ICONE_SORGENTE = {
 const LINGUE = [["it", "Italiano (anche con termini inglesi)"], ["en", "Inglese"], ["auto", "Automatica (lingue diverse, non mescolate)"]];
 const TIPI_SESSIONE = [["", "Scrivo io il contesto"], ["lezione", "Lezione dal vivo"], ["video", "Video (YouTube…)"], ["riunione", "Riunione / chiamata"]];
 
-/* opzioni della combobox: il predefinito di Windows per primo, quello salvato anche se ora è scollegato */
+/*
+ * Opzioni della combobox. Microfono: da quale si registra. Audio del PC: dove lo ascolti (cuffie, casse
+ * o nessuno); da dove leggerlo lo decide il programma (cavo virtuale se è l'uscita di Windows).
+ * Quello salvato resta in elenco anche se ora è scollegato.
+ */
 async function opzioniDispositivo(sorgente, scelto = "") {
+  if (sorgente === "chiamata") sorgente = "pc";
   const d = await api(`/api/dispositivi/${sorgente}`).catch(e => ({ nomi: [], predefinito: "", errore: e.message }));
-  // CABLE Input = solo registrazione: l'audio va nel cavo e non lo si rimanda a nessuna cuffia
-  const nome = n => sorgente === "pc" && /cable/i.test(n) ? `${n} (solo registrazione, non si sente)` : n;
-  const opzioni = [["", `Predefinito di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, nome(n)])];
-  if (sorgente === "chiamata") opzioni.push(["__muto", "Nessuna: non la sento, solo registrazione"]);
-  if (scelto && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
-  return { opzioni, errore: d.errore };
+  let opzioni, nota = "";
+  if (sorgente === "microfono") {
+    opzioni = [["", `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
+  } else {
+    const cavo = /cable/i.test(d.predefinito);
+    opzioni = [["", cavo ? "Automatico: le cuffie collegate" : `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`],
+      ...d.nomi.filter(n => !/cable/i.test(n)).map(n => [n, n]),
+      ["__muto", "Non lo ascolto (solo registrazione)"]];
+    nota = cavo ? "L'uscita di Windows è il cavo virtuale: l'audio passa da lì e lo senti dove scegli qui." : "";
+  }
+  if (scelto && !/cable/i.test(scelto) && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
+  return { opzioni, errore: d.errore, nota };
 }
 
 /* avvio dalla home: dispositivo, lingua e progetto, poi una sessione nuova */
 async function avvioRapido(sorgente, progetti) {
   const attivi = progetti.filter(p => p.stato !== "archiviato");
   // si propone l'ultimo progetto usato con la stessa sorgente
-  const simile = attivi.find(p => p.sorgente === sorgente);
+  const simile = attivi.find(p => (p.sorgente === "chiamata" ? "pc" : p.sorgente) === sorgente);
   const { opzioni, errore } = await opzioniDispositivo(sorgente, simile?.dispositivo || "");
   if (errore) toast(errore, "errore");
   const nuovo = "__nuovo";
@@ -770,9 +781,10 @@ async function avvioRapido(sorgente, progetti) {
     titolo, conferma: "Avvia",
     testo: sorgente === "microfono"
       ? "L'audio della lezione si salva anche nella cartella del progetto, compresso (~14 MB l'ora)."
-      : "Fai partire il video normalmente: viene trascritto quello che esce dal dispositivo scelto.",
+      : "Fai partire il video o la chiamata normalmente: viene trascritto quello che il PC fa sentire.",
     campi: [
-      { id: "dispositivo", label: sorgente === "microfono" ? "Microfono" : "Audio che esce da", opzioni, valore: simile?.dispositivo || "" },
+      { id: "dispositivo", label: sorgente === "microfono" ? "Microfono" : "Dove lo ascolti", opzioni,
+        valore: opzioni.some(([o]) => o === simile?.dispositivo) ? simile.dispositivo : "" },
       { id: "lingua", label: "Lingua", opzioni: LINGUE, valore: simile?.lingua || "it" },
       { id: "progetto", label: "Progetto", opzioni: [...attivi.map(p => [p.slug, p.nome]), [nuovo, "+ Nuovo progetto…"]],
         valore: simile?.slug || (attivi.length ? attivi[0].slug : nuovo), cambia: mostraNome },
@@ -1159,16 +1171,15 @@ function pannelloProcesso(slug, tipo, box, progetto = {}, sessioneAperta = "") {
     // il dispositivo scelto vale per la sua sorgente: cambiando sorgente si riparte dal predefinito
     const caricaDispositivi = async scelto => {
       const mic = campo("sorgente").value === "microfono";
-      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono"
-        : campo("sorgente").value === "chiamata" ? "Sentila su (cuffie)" : "Audio che esce da";
+      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono" : "Dove lo ascolti";
       $(".solo-pc", sa).hidden = mic;
       $(".info-extra", box).textContent = mic ? "L'audio si salva anche, compresso" : "";
-      const { opzioni, errore } = await opzioniDispositivo(campo("sorgente").value, scelto);
+      const { opzioni, errore, nota } = await opzioniDispositivo(campo("sorgente").value, scelto);
       campo("dispositivo").innerHTML = opzioni.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
-      campo("dispositivo").value = scelto;
-      if (errore) $(".info-extra", box).textContent = errore;
+      campo("dispositivo").value = opzioni.some(([v]) => v === scelto) ? scelto : "";
+      if (errore || nota) $(".info-extra", box).textContent = errore || nota;
     };
-    campo("sorgente").value = progetto.sorgente || "pc";
+    campo("sorgente").value = progetto.sorgente === "microfono" ? "microfono" : "pc";
     campo("lingua").value = progetto.lingua || "it";
     campo("salva_audio").checked = !!progetto.salva_audio;
     caricaDispositivi(progetto.dispositivo || "");

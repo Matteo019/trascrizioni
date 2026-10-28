@@ -12,12 +12,14 @@ Progetto personale, fornito così com'è (licenza MIT), senza garanzie né suppo
 
 | | Microfono | Audio del PC |
 |---|---|---|
-| Per | lezione dal vivo, chi parla nella stanza | YouTube, video, qualsiasi audio che il PC riproduce |
-| Dispositivo | il microfono scelto (interno, cuffie, USB…) | le casse o le cuffie da cui esce l'audio |
+| Per | lezione dal vivo, chi parla nella stanza | YouTube, video, Teams, qualsiasi audio che il PC riproduce |
+| Dispositivo | il microfono scelto (interno, cuffie, USB…) | **dove lo ascolti**: cuffie, casse, oppure *non lo ascolto* |
 | Audio salvato | sempre, compresso Opus (~14 MB l'ora) | solo se lo chiedi |
 
-L'audio del PC si cattura direttamente (WASAPI loopback): **non serve nessun cavo virtuale**,
-guardi il video normalmente e intanto viene trascritto.
+Per l'audio del PC scegli solo dove ascoltarlo: da dove leggerlo lo decide il programma.
+Di solito lo cattura direttamente (WASAPI loopback, **nessun cavo virtuale**). Sui PC aziendali dove la
+registrazione diretta è bloccata, imposta l'uscita audio di Windows su **«CABLE Input»** ([VB-CABLE](https://vb-audio.com/Cable/)):
+il programma se ne accorge, legge l'audio dal cavo e lo rimanda alle cuffie scelte, così lo senti lo stesso.
 
 **Lingua:** *Italiano* va bene anche quando si parla italiano con molti termini inglesi
 (scrivili nel glossario del progetto perché Whisper li scriva giusti). *Inglese* per video o
