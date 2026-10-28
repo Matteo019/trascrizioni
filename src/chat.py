@@ -132,28 +132,61 @@ def panoramica(testo: str) -> str:
     return "\n".join(righe)[:MAX_CARATTERI_SEZIONE * 2]
 
 
+# --- classificazione automatica delle parole per la ricerca Wikipedia ---
+_NUMERI_WEB = {"due", "tre", "quattro", "cinque", "sei", "sette", "otto", "nove", "dieci",
+               "primo", "secondo", "terzo", "quarto", "quinto", "sesto", "settimo",
+               "undici", "dodici", "tredici", "cento", "mille"}
+_SUFFISSI_VERBALI_WEB = ("ano", "ono", "are", "ere", "ire", "ato", "uto", "ito", "ando", "endo",
+                         "isce", "iscono", "iona", "enta", "ura", "izza")
+_SUFFISSI_GENERICI_WEB = ("mente", "zione", "zioni", "aggio", "ezza")
+_VERBI_DOMANDA_WEB = {"significa", "significano", "rappresenta", "rappresentano", "funziona", "funzionano",
+                      "prevede", "prevedono", "consiste", "consistono", "descrive", "descrivono",
+                      "indica", "indicano", "serve", "servono", "contiene", "contengono",
+                      "riguarda", "riguardano", "chiama", "chiamano", "spiega", "spiegami",
+                      "spiegano", "configura", "definisce", "differenza", "differenze",
+                      "vantaggi", "svantaggi", "caratteristiche"}
+
+
+def _specificita_web(parola: str, sigle: set) -> int:
+    """Punteggio di specificità: più alto → più utile per cercare su Wikipedia."""
+    p = parola
+    if p in _NUMERI_WEB:
+        return -20
+    if p in _VERBI_DOMANDA_WEB:
+        return -10
+    s = 0
+    if p.upper() in sigle:          # sigla maiuscola nel testo originale (EDI, MRP...)
+        s += 25
+    if re.search(r"[kwxyj]", p):    # lettera rara in italiano → termine straniero/tecnico
+        s += 20
+    if re.search(r"\d", p):          # contiene cifre → codice
+        s += 15
+    for suf in _SUFFISSI_VERBALI_WEB:
+        if p.endswith(suf) and len(p) > len(suf) + 2:
+            s -= 8
+            break
+    for suf in _SUFFISSI_GENERICI_WEB:
+        if p.endswith(suf) and len(p) > len(suf) + 2:
+            s -= 5
+            break
+    if len(p) <= 3:
+        s -= 5
+    return s
+
+
 def cerca_web(domanda: str) -> list:
     """Le pagine di Wikipedia più pertinenti alla domanda: [{titolo, link, testo}]; [] se internet non risponde."""
     # Wikipedia cerca pagine con TUTTE le parole: si prova la frase intera, poi meno parole.
-    # Le parole vanno ordinate per specificità: le più rare (nomi propri, termini tecnici) per prime,
+    # Le parole vanno ordinate per specificità (termini tecnici e sigle prima, verbi generici dopo),
     # così i fallback con meno parole cercano quelle che contano davvero.
+    sigle = set(re.findall(r"\b[A-Z]{2,}\b", domanda))
     domande = re.findall(r"[^.!?\n]*\?", domanda)
     testo_ricerca = (domande[-1] if domande else domanda).casefold()
     parole = [p for p in re.findall(r"[\wà-ù'-]{3,}", testo_ricerca)
               if p not in PAROLE_VUOTE]
     if not parole:
         return []
-    # parole generiche: verbi e avverbi comuni che inquinano la ricerca Wikipedia
-    _generiche_web = {"rappresentano", "rappresenta", "significano", "significa", "chiamano", "chiama",
-                      "servono", "serve", "funziona", "funzionano", "definisce", "definiscono",
-                      "descrivono", "descrive", "indica", "indicano", "contiene", "contengono",
-                      "riguarda", "riguardano", "prevede", "prevedono", "consiste", "consistono",
-                      "quattro", "cinque", "tre", "due", "primo", "secondo", "terzo", "quarto",
-                      "principale", "principali", "diversi", "diverse", "vari", "varie",
-                      "tipo", "tipi", "categorie", "categoria", "esempio", "esempi",
-                      "differenza", "differenze", "caratteristiche", "vantaggi", "svantaggi"}
-    specifiche = [p for p in parole if p not in _generiche_web]
-    parole = specifiche if specifiche else parole
+    parole = sorted(parole, key=lambda p: _specificita_web(p, sigle), reverse=True)
 
     def chiedi(parametri):
         url = f"{WIKIPEDIA}?{urllib.parse.urlencode({**parametri, 'format': 'json', 'formatversion': 2})}"
