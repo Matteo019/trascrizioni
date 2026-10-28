@@ -45,7 +45,7 @@ import motori
 # se nessuno si ferma, a MAX_CHUNK_SECONDS si taglia nel punto più silenzioso e il resto passa al blocco dopo.
 # ~45-60s -> ~600 richieste in 9 ore (limite free Groq: 2000/giorno).
 # Whisper su questo PC: ~30s, la finestra fissa dell'encoder (blocchi più corti costano quanto 30s).
-if motori.fornitore_trascrizione() == "pc":
+if motori.uso("trascrizione")["fornitore"] == "pc":
     MIN_CHUNK_SECONDS, MAX_CHUNK_SECONDS = 25, 30
 else:
     MIN_CHUNK_SECONDS, MAX_CHUNK_SECONDS = 45, 60
@@ -82,9 +82,8 @@ SOGLIA_SILENZIO = SILENCE_RMS[SORGENTE]
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
 # quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
 # Con OpenAI o il Whisper locale c'è un solo modello, quello scelto nelle Impostazioni.
-WHISPER_MODELS = motori.modelli_trascrizione([m.strip() for m in os.environ.get(
-    "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()])
-MOTORE = motori.nome_trascrizione()
+WHISPER_MODELS = [motori.modello("trascrizione")]
+MOTORE = motori.nome("trascrizione")
 
 # Frasi che Whisper "inventa" sul silenzio o sul rumore
 HALLUCINATIONS = {
@@ -508,8 +507,7 @@ def main():
     # così il riassunto non archivia né cancella il file prima che venga aperto
     segnalibro = PROGETTO_DIR / FILE_SESSIONE_IN_SCRITTURA
     segnalibro.write_text(SESSION_NAME, encoding="utf-8")
-    if motori.fornitore_trascrizione() != "groq":
-        print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
+    print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")

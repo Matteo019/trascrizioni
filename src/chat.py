@@ -1,12 +1,11 @@
 """
-Domande sui documenti dei progetti (riassunti, appunti, trascrizioni) con un modello NVIDIA a scelta
-o con il fornitore scelto nelle Impostazioni (OpenAI, Gemini, Claude, AI locale...).
+Domande sui documenti dei progetti (riassunti, appunti, trascrizioni),
+con la chiave e il modello scelti per la chat nelle Impostazioni (NVIDIA, Groq, OpenAI, Gemini, Claude, AI locale...).
 Nessun indice: si scelgono i pezzi più pertinenti con un conteggio di parole, a ogni domanda.
 """
 
 import json
 import math
-from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import time
@@ -18,45 +17,11 @@ import motori
 import progetti
 import sessioni
 
-# modelli gratuiti dell'endpoint NVIDIA tra cui si sceglie nella chat
-MODELLI = [
-    {"id": "openai/gpt-oss-20b", "nome": "GPT-OSS 20B", "autore": "OpenAI",
-     "descrizione": "Piccolo e rapidissimo, solo testo. Bravo in ragionamenti brevi e calcoli: ideale per domande puntuali.",
-     "punti": ["Il più veloce", "Logica e calcoli"]},
-    {"id": "google/gemma-4-31b-it", "nome": "Gemma 4 31B", "autore": "Google",
-     "descrizione": "Equilibrato: ragiona bene e risponde in modo ordinato. Va bene per quasi tutte le domande.",
-     "punti": ["Equilibrato"]},
-    {"id": "nvidia/nemotron-3-ultra-550b-a55b", "nome": "Nemotron 3 Ultra", "autore": "NVIDIA",
-     "descrizione": "Il più potente: ragionamento profondo e contesto lunghissimo, per domande complesse. Più lento, e condivide i limiti con i riassunti.",
-     "punti": ["Massima qualità", "Più lento"]},
-]
-MODELLO_PREDEFINITO = MODELLI[0]["id"]
-
-
-def modelli() -> list:
-    """Modelli tra cui scegliere: quelli NVIDIA, oppure solo quello del fornitore scelto nelle Impostazioni."""
-    if motori.testo_nvidia():
-        return MODELLI
-    nome = motori.modello_testo()
-    if motori.testo_locale():
-        descrizione, punti = f"Gira sul tuo PC ({motori.url_testo()}): i documenti non escono dal computer.", ["Locale", "Privato"]
-    else:
-        descrizione, punti = f"Scelto nelle Impostazioni: risponde {motori.nome_testo()} con la tua chiave.", [motori.nome_testo()]
-    return [{"id": nome, "nome": nome, "autore": motori.nome_testo(), "descrizione": descrizione, "punti": punti}]
-
-
-def predefinito() -> str:
-    return modelli()[0]["id"]
 # al modello vanno solo le sezioni che servono: poche, brevi, e la risposta arriva in fretta
 MAX_CARATTERI_CONTESTO = 12000
 MAX_SEZIONI = 8
 MAX_CARATTERI_SEZIONE = 3000
-# un modello gratuito che non risponde in 40 s di solito è fermo: si passa al successivo
-TIMEOUT_SECONDI = 40
-TEMPO_MASSIMO_SECONDI = 100   # oltre questo non si provano altri modelli: meglio un errore chiaro che un'attesa infinita
-TIMEOUT_PROVA_SECONDI = 25
-DURATA_STATO_SECONDI = 180
-_stato_modelli = {"quando": 0.0, "stato": {}}
+TIMEOUT_SECONDI = 100
 
 PAROLE_VUOTE = set("""il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cui non come
 dove quando quale quali quanto cosa cos è sono era del dello della dei degli delle al allo alla ai agli alle
@@ -288,14 +253,8 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
     return scelti
 
 
-def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
-             modello: str = "") -> dict:
-    catalogo = modelli()
-    if not motori.testo_nvidia():
-        modello = catalogo[0]["id"]        # una chat aperta prima del cambio può ancora chiedere un modello NVIDIA
-    modello = modello or catalogo[0]["id"]
-    if modello not in {m["id"] for m in catalogo}:
-        raise RuntimeError("Modello non disponibile: scegline uno dall'elenco.")
+def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") -> dict:
+    modello = motori.modello("chat")
     # le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?")
     testo_ricerca = " ".join([m["testo"] for m in storico[-4:] if m.get("ruolo") == "utente"] + [domanda])
     pezzi = scegli_pezzi(testo_ricerca, slug, sessione)
@@ -325,73 +284,27 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
                          "content": str(m.get("testo", ""))[:1500]})
     messaggi.append({"role": "user", "content": domanda})
 
-    # un modello locale sul solo processore può essere lento: gli si lascia tutto il tempo massimo
-    timeout = TEMPO_MASSIMO_SECONDI if motori.testo_locale() else TIMEOUT_SECONDI
-    client = motori.client_testo(timeout)
-    # prima il modello scelto, poi gli altri: se uno dei gratuiti è fermo risponde il successivo
-    ordine = [modello] + [m["id"] for m in catalogo if m["id"] != modello]
-    nomi = {m["id"]: m["nome"] for m in catalogo}
-    saltati, motivi = [], []
-    avvio = time.time()
-    for prova in ordine:
-        rimasti = TEMPO_MASSIMO_SECONDI - (time.time() - avvio)
-        if rimasti < 10:
-            break
-        inizio = time.time()
-        try:
-            r = client.with_options(timeout=min(timeout, rimasti)).chat.completions.create(
-                model=prova, messages=messaggi, temperature=0.2, max_tokens=3000)
-            testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
-            motivo = "risposta vuota"
-        except Exception as exc:
-            testo = ""
-            motivo = f"{type(exc).__name__}: {str(exc)[:120]}"
-        if not testo:
-            # finisce nel log della dashboard: si vede quale modello è fermo e perché
-            print(f"[CHAT] {prova} non ha risposto in {time.time() - inizio:.0f}s ({motivo})", flush=True)
-            motivi.append(f"{nomi[prova]}: {motivo}")
-        if testo:
-            _stato_modelli["stato"][prova] = True
-            testo, voci = separa_aggiunte(testo)
-            segnate = None
-            if voci:
-                dove, nome = sessione_per_aggiunte(slug, sessione, pezzi)
-                segnate = {"voci": voci, "nuove": 0}
-                if nome:
-                    segnate.update(progetto=dove, sessione=nome, nuove=sessioni.aggiungi(dove, nome, voci))
-            return {"risposta": testo, "fonti": elenco_fonti, "modello": prova, "nome_modello": nomi[prova],
-                    "secondi": round(time.time() - inizio), "saltati": saltati, "web": web, "segnate": segnate}
-        _stato_modelli["stato"][prova] = False
-        saltati.append(nomi[prova])
-    if motori.testo_locale():
-        raise RuntimeError(f"L'AI locale ({motori.url_testo()}) non ha risposto: è avviata e il modello "
-                           f"«{modello}» è scaricato? Dettagli: " + "; ".join(motivi))
-    if not motori.testo_nvidia():
-        raise RuntimeError(f"{motori.nome_testo()} non ha risposto: controlla la chiave e il nome del modello "
-                           f"«{modello}» in Impostazioni. Dettagli: " + "; ".join(motivi))
-    raise RuntimeError(f"Nessun modello NVIDIA ha risposto in {time.time() - avvio:.0f} s. Riprova tra poco. "
-                       "Dettagli: " + "; ".join(motivi))
-
-
-def stato_modelli() -> dict:
-    """Prova veloce di tutti i modelli in parallelo (risultato tenuto qualche minuto): {id: risponde?}."""
-    if not motori.testo_nvidia():
-        return {}                # un solo modello: niente da scegliere, e la prova costerebbe una richiesta
-    if time.time() - _stato_modelli["quando"] < DURATA_STATO_SECONDI and _stato_modelli["stato"]:
-        return _stato_modelli["stato"]
+    inizio = time.time()
     try:
-        client = motori.client_testo(TIMEOUT_PROVA_SECONDI)
+        r = motori.client("chat", TIMEOUT_SECONDI).chat.completions.create(
+            model=modello, messages=messaggi, temperature=0.2, max_tokens=motori.max_token("chat", 3000))
+        testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
     except RuntimeError:
-        return {}
+        raise
+    except Exception as exc:
+        # finisce nel log della dashboard: si vede perché il modello non ha risposto
+        print(f"[CHAT] {modello} non ha risposto in {time.time() - inizio:.0f}s ({type(exc).__name__}: {str(exc)[:200]})", flush=True)
+        raise RuntimeError(f"{motori.nome('chat')} non ha risposto ({type(exc).__name__}: {str(exc)[:160]}). "
+                           f"Riprova tra poco, o controlla chiave e modello «{modello}» in Impostazioni.")
+    if not testo:
+        raise RuntimeError(f"{motori.nome('chat')} ha dato una risposta vuota: riprova tra poco.")
 
-    def prova(mid):
-        try:
-            client.chat.completions.create(model=mid, messages=[{"role": "user", "content": "ok"}], max_tokens=5)
-            return mid, True
-        except Exception:
-            return mid, False
-
-    with ThreadPoolExecutor(len(MODELLI)) as pool:
-        stato = dict(pool.map(prova, [m["id"] for m in MODELLI]))
-    _stato_modelli.update(quando=time.time(), stato=stato)
-    return stato
+    testo, voci = separa_aggiunte(testo)
+    segnate = None
+    if voci:
+        dove, nome = sessione_per_aggiunte(slug, sessione, pezzi)
+        segnate = {"voci": voci, "nuove": 0}
+        if nome:
+            segnate.update(progetto=dove, sessione=nome, nuove=sessioni.aggiungi(dove, nome, voci))
+    return {"risposta": testo, "fonti": elenco_fonti, "nome_modello": modello,
+            "secondi": round(time.time() - inizio), "web": web, "segnate": segnate}

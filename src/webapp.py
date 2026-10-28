@@ -41,8 +41,6 @@ import chat
 from export_pdf import markdown_in_pdf
 
 SCRIPT = {"trascrizione": ROOT / "src" / "trascrittore.py", "riassunto": ROOT / "src" / "riassunto.py"}
-CHIAVI = motori.CHIAVI
-IMPOSTAZIONI = ("RIASSUNTO_INTERVALLO_MINUTI", *motori.IMPOSTAZIONI)
 TIPI_CONFIG = ("contesto", "glossario")
 CODA_LOG_BYTE = 64 * 1024
 
@@ -438,16 +436,6 @@ def api_cerca(q: str = "", progetto: str = "", tipi: str = "trascrizione,appunti
     return sessioni.cerca(q, progetto, tuple(t for t in tipi.split(",") if t))
 
 
-@app.get("/api/chat/modelli")
-def api_chat_modelli():
-    return {"modelli": chat.modelli(), "predefinito": chat.predefinito()}
-
-
-@app.get("/api/chat/stato")
-def api_chat_stato():
-    return chat.stato_modelli()
-
-
 @app.post("/api/chat")
 def api_chat(dati: dict = Body(...)):
     domanda = str(dati.get("domanda", "")).strip()
@@ -460,7 +448,7 @@ def api_chat(dati: dict = Body(...)):
         verifica_sessione(progetto, sessione)
     storico = [m for m in dati.get("storico", []) if isinstance(m, dict)]
     try:
-        r = chat.rispondi(domanda, storico, progetto, sessione, str(dati.get("modello") or ""))
+        r = chat.rispondi(domanda, storico, progetto, sessione)
     except RuntimeError as exc:
         raise HTTPException(502, str(exc))
     return {**r, "html": sessioni.md_in_html(r["risposta"])}
@@ -513,7 +501,7 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False, sessione: str = ""):
         return {**p.stato(), "sessione": nome}
     else:
         try:
-            motori.client_testo(5)             # chiave, indirizzo e modello del fornitore scelto
+            motori.client("riassunti", 5)      # chiave, indirizzo e modello scelti per i riassunti
         except RuntimeError as exc:
             raise HTTPException(400, str(exc))
     # la trascrizione continua l'ultima sessione; una nuova nasce solo dal bottone "Nuova sessione"
@@ -557,7 +545,7 @@ async def api_importa(slug: str, request: Request, nome_file: str, lingua: str =
     r = processo(slug, "riassunto")
     if not r.attivo:
         try:
-            motori.client_testo(5)
+            motori.client("riassunti", 5)
             r.avvia({})
         except RuntimeError:        # senza AI per i riassunti la trascrizione serve lo stesso
             pass
@@ -586,48 +574,33 @@ def api_log(slug: str, tipo: str, da: int = -1):
 @app.get("/api/impostazioni")
 def api_impostazioni():
     return {
-        "chiavi": {k: bool(os.environ.get(k)) for k in CHIAVI},
-        # con l'AI locale le chiavi cloud non servono: niente allarme in home
-        "chiavi_ok": all(os.environ.get(k) for k in motori.chiavi_necessarie()),
-        "predefiniti": motori.PREDEFINITI,
-        "fornitori": motori.catalogo(),
-        "valori": {k: os.environ.get(k, "") for k in IMPOSTAZIONI},
-        "env_esiste": ENV_PATH.exists(),
+        **motori.catalogo(),
+        # con l'AI locale le chiavi cloud non servono: l'allarme in home guarda solo gli usi scelti
+        "chiavi_ok": motori.pronti(),
+        "intervallo": os.environ.get("RIASSUNTO_INTERVALLO_MINUTI", ""),
     }
 
 
 @app.put("/api/impostazioni")
 def api_salva_impostazioni(dati: dict = Body(...)):
-    nuovi = {}
-    for k in CHIAVI:
-        valore = str(dati.get("chiavi", {}).get(k, "")).strip()
-        if valore:                  # vuoto = lascia la chiave com'è
-            nuovi[k] = valore
-    for k in IMPOSTAZIONI:
-        if k in dati.get("valori", {}):
-            nuovi[k] = str(dati["valori"][k]).strip()
-    if "RIASSUNTO_INTERVALLO_MINUTI" in nuovi and nuovi["RIASSUNTO_INTERVALLO_MINUTI"]:
+    intervallo = str(dati.get("intervallo", "")).strip().replace(",", ".")
+    if intervallo:
         try:
-            if float(nuovi["RIASSUNTO_INTERVALLO_MINUTI"].replace(",", ".")) <= 0:
+            if float(intervallo) <= 0:
                 raise ValueError
-            nuovi["RIASSUNTO_INTERVALLO_MINUTI"] = nuovi["RIASSUNTO_INTERVALLO_MINUTI"].replace(",", ".")
         except ValueError:
             raise HTTPException(400, "L'intervallo dei riassunti deve essere un numero di minuti maggiore di zero.")
-    if nuovi.get("AI_TRASCRIZIONE", "groq") not in ("", *motori.TRASCRIZIONE) or nuovi.get("AI_TESTO", "nvidia") not in ("", *motori.FORNITORI):
-        raise HTTPException(400, "Scelta dell'AI non valida.")
-    if nuovi.get("WHISPER_PC_MODELLO", "small") not in ("", *motori.MODELLI_PC):
-        raise HTTPException(400, "Modello di Whisper su questo PC non valido.")
-    for k in ("WHISPER_LOCALE_URL", "LLM_LOCALE_URL", "PERSONALIZZATO_URL"):
-        if nuovi.get(k) and not nuovi[k].startswith(("http://", "https://")):
-            raise HTTPException(400, "L'indirizzo dell'AI locale deve iniziare con http:// (es. http://localhost:11434/v1).")
     if not ENV_PATH.exists() and (ROOT / ".env.example").exists():
         ENV_PATH.write_text((ROOT / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
-    scrivi_dotenv(nuovi)
-    for k, v in nuovi.items():      # i processi avviati da qui in poi vedono i valori nuovi
-        if v:
-            os.environ[k] = v
-        else:
-            os.environ.pop(k, None)
+    try:
+        motori.salva(dati, {str(k): str(v) for k, v in dati.get("valori_chiavi", {}).items()})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    scrivi_dotenv({"RIASSUNTO_INTERVALLO_MINUTI": intervallo})
+    if intervallo:              # i processi avviati da qui in poi vedono il valore nuovo
+        os.environ["RIASSUNTO_INTERVALLO_MINUTI"] = intervallo
+    else:
+        os.environ.pop("RIASSUNTO_INTERVALLO_MINUTI", None)
     return api_impostazioni()
 
 
