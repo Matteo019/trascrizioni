@@ -134,12 +134,26 @@ def panoramica(testo: str) -> str:
 
 def cerca_web(domanda: str) -> list:
     """Le pagine di Wikipedia più pertinenti alla domanda: [{titolo, link, testo}]; [] se internet non risponde."""
-    # Wikipedia cerca pagine con TUTTE le parole: si prova la frase con il punto di domanda, poi meno parole
+    # Wikipedia cerca pagine con TUTTE le parole: si prova la frase intera, poi meno parole.
+    # Le parole vanno ordinate per specificità: le più rare (nomi propri, termini tecnici) per prime,
+    # così i fallback con meno parole cercano quelle che contano davvero.
     domande = re.findall(r"[^.!?\n]*\?", domanda)
-    parole = [p for p in re.findall(r"[\wà-ù'-]{3,}", (domande[-1] if domande else domanda).casefold())
+    testo_ricerca = (domande[-1] if domande else domanda).casefold()
+    parole = [p for p in re.findall(r"[\wà-ù'-]{3,}", testo_ricerca)
               if p not in PAROLE_VUOTE]
     if not parole:
         return []
+    # parole generiche: verbi e avverbi comuni che inquinano la ricerca Wikipedia
+    _generiche_web = {"rappresentano", "rappresenta", "significano", "significa", "chiamano", "chiama",
+                      "servono", "serve", "funziona", "funzionano", "definisce", "definiscono",
+                      "descrivono", "descrive", "indica", "indicano", "contiene", "contengono",
+                      "riguarda", "riguardano", "prevede", "prevedono", "consiste", "consistono",
+                      "quattro", "cinque", "tre", "due", "primo", "secondo", "terzo", "quarto",
+                      "principale", "principali", "diversi", "diverse", "vari", "varie",
+                      "tipo", "tipi", "categorie", "categoria", "esempio", "esempi",
+                      "differenza", "differenze", "caratteristiche", "vantaggi", "svantaggi"}
+    specifiche = [p for p in parole if p not in _generiche_web]
+    parole = specifiche if specifiche else parole
 
     def chiedi(parametri):
         url = f"{WIKIPEDIA}?{urllib.parse.urlencode({**parametri, 'format': 'json', 'formatversion': 2})}"
