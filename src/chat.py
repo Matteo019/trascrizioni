@@ -58,6 +58,8 @@ Dopo la risposta, se in questo scambio sono emerse informazioni NUOVE che i docu
 scrivi una riga con solo {separatore} e sotto una voce per informazione: "- " seguito da una frase breve che si
 capisca da sola, chiusa dalla fonte tra parentesi: (detto in chat) oppure (fonte: link della pagina).
 Niente voci per cose già nei documenti o per tue deduzioni; se non c'è niente di nuovo, non scrivere la riga {separatore}.
+Eccezione: se l'utente corregge la tua risposta o ti chiede di segnare, annotare o aggiungere qualcosa,
+scrivi sempre la riga {separatore} con la voce corretta, anche se in parte compare già nei documenti.
 
 DOCUMENTI:
 {documenti}
@@ -286,7 +288,10 @@ def sessione_per_aggiunte(slug: str, sessione: str, pezzi: list):
 
 
 def fonti(slug: str = "", sessione: str = ""):
-    """Per ogni sessione il documento migliore disponibile: riassunto, poi appunti, poi trascrizione."""
+    """
+    Per ogni sessione riassunto e appunti (il riassunto sintetizza e può saltare dettagli che gli appunti hanno);
+    la trascrizione solo se mancano entrambi. Il primo documento della sessione porta le aggiunte e fa la panoramica.
+    """
     for progetto in ([slug] if slug else progetti.elenco()):
         info = progetti.leggi_info(progetto)
         if not slug and info["stato"] == "archiviato":
@@ -297,14 +302,16 @@ def fonti(slug: str = "", sessione: str = ""):
                 continue
             f = sessioni.file_sessione(base, nome)
             aggiunte = sessioni.leggi(f["aggiunte"])
+            titolo = f["riassunto"].stem.split(" - ", 1)[1] if f["riassunto"] else ""
+            primo = True
             for tipo in ("riassunto", "appunti", "trascrizione"):
                 testo = sessioni.leggi(f[tipo])
-                if testo.strip():
-                    testo = sessioni.con_aggiunte(testo, aggiunte)
-                    titolo = f["riassunto"].stem.split(" - ", 1)[1] if f["riassunto"] else ""
-                    yield {"progetto": progetto, "nome_progetto": info["nome"], "sessione": nome,
-                           "titolo": titolo, "tipo": tipo, "testo": testo}
-                    break
+                if not testo.strip() or (tipo == "trascrizione" and not primo):
+                    continue
+                yield {"progetto": progetto, "nome_progetto": info["nome"], "sessione": nome, "titolo": titolo,
+                       "tipo": tipo, "testo": sessioni.con_aggiunte(testo, aggiunte) if primo else testo,
+                       "principale": primo}
+                primo = False
 
 
 def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
@@ -338,7 +345,7 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
     # Serve almeno una parola "generale" nella domanda: "ciao" o parole che non compaiono in nessun documento non lo sono.
     if any(r in GENERICHE for r in cercate) and not specifiche and not cerca_incerti:
         scelti, totale = [], 0
-        for d in documenti:
+        for d in (d for d in documenti if d["principale"]):
             pezzo = panoramica(d["testo"]) if d["tipo"] != "trascrizione" else d["testo"][:MAX_CARATTERI_SEZIONE]
             if totale + len(pezzo) > MAX_CARATTERI_CONTESTO:
                 break
@@ -372,16 +379,16 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
         return {"risposta": "Non ho trovato nei documenti né su internet niente che riguardi questa domanda. "
                             "Prova con altre parole, o scegli un progetto.", "fonti": []}
 
-    # una fonte numerata per sessione
+    # una fonte numerata per documento (riassunto e appunti della stessa sessione sono due fonti: il link apre quello giusto)
     elenco_fonti, numeri = [], {}
     for p in pezzi:
-        chiave = (p["progetto"], p["sessione"])
+        chiave = (p["progetto"], p["sessione"], p["tipo"])
         if chiave not in numeri:
             numeri[chiave] = len(elenco_fonti) + 1
             elenco_fonti.append({k: p[k] for k in ("progetto", "nome_progetto", "sessione", "titolo", "tipo")})
     documenti = "\n\n".join(
-        f"[{numeri[(p['progetto'], p['sessione'])]}] {p['nome_progetto']} — sessione {sessioni.etichetta(p['sessione'])}"
-        f"{' — ' + p['titolo'] if p['titolo'] else ''} — {p['sezione']}\n{p['pezzo']}" for p in pezzi)
+        f"[{numeri[(p['progetto'], p['sessione'], p['tipo'])]}] {p['nome_progetto']} — sessione {sessioni.etichetta(p['sessione'])}"
+        f"{' — ' + p['titolo'] if p['titolo'] else ''} — {p['tipo']} — {p['sezione']}\n{p['pezzo']}" for p in pezzi)
 
     pagine = "\n\n".join(f"{p['titolo']} ({p['link']})\n{p['testo']}" for p in web)
     messaggi = [{"role": "system", "content": SISTEMA.format(

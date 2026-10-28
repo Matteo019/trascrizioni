@@ -1542,7 +1542,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   const lista = q(".messaggi"), campo = q("textarea"), bottone = q(".invia");
 
   const fontiHtml = fonti => !fonti?.length ? "" : `<div class="fonti">${fonti.map((f, i) =>
-    `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))}</a>`).join("")}</div>`;
+    `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))} · ${NOMI_FILE[f.tipo]}</a>`).join("")}</div>`;
 
   const webHtml = web => !web?.length ? "" : `<div class="fonti"><span class="secondario">Internet:</span>${web.map(w =>
     `<a class="fonte" href="${esc(w.link)}" target="_blank" rel="noopener">${esc(w.titolo)}</a>`).join("")}</div>`;
