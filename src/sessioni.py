@@ -106,6 +106,7 @@ def file_sessione(base: Path, nome: str) -> dict:
         "in_corso": in_scrittura,
         "da_riassumere": in_corso.exists() and not in_scrittura,
         "appunti": base / "storico" / f"Appunti {et}.md",
+        "aggiunte": base / "storico" / f"Aggiunte {et}.md",
         "riassunto": riassunti[0] if riassunti else None,
         "parti": sorted(cartella_parti.glob("Parte *.md")) if cartella_parti.exists() else [],
     }
@@ -116,7 +117,7 @@ def elimina_sessione(slug: str, nome: str) -> Path:
     base = progetti.cartella(slug)
     f = file_sessione(base, nome)
     percorsi = [base / "trascrizioni" / f"trascrizione_{nome}.txt", base / "storico" / f"trascrizione_{nome}.txt",
-                f["appunti"], f["riassunto"], base / "riassunti" / f"Parti {etichetta(nome)}"]
+                f["appunti"], f["aggiunte"], f["riassunto"], base / "riassunti" / f"Parti {etichetta(nome)}"]
     if (base / "da_ritrascrivere").exists():
         percorsi += sorted((base / "da_ritrascrivere").glob(f"{nome}__*.wav"))
     if (base / "audio").exists():
@@ -138,6 +139,10 @@ def unisci_sessioni(slug: str, nome: str, altra: str) -> str:
         aperta.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(archiviata, aperta)
     testo = leggi(file_sessione(base, toglie)["trascrizione"])
+    aggiunte = leggi(file_sessione(base, toglie)["aggiunte"])
+    if aggiunte.strip():
+        with open(file_sessione(base, tiene)["aggiunte"], "a", encoding="utf-8") as f:
+            f.write(aggiunte if aggiunte.endswith("\n") else aggiunte + "\n")
     if testo.strip():
         with open(aperta, "a", encoding="utf-8") as f:
             f.write(testo if testo.endswith("\n") else testo + "\n")
@@ -147,6 +152,35 @@ def unisci_sessioni(slug: str, nome: str, altra: str) -> str:
                 p.rename(p.with_name(tiene + p.name[len(toglie):]))
     elimina_sessione(slug, toglie)
     return tiene
+
+
+# ---------------------------------------------------------------------------
+# Aggiunte dalla chat: cose dette dall'utente o trovate su internet, tenute fuori da appunti e
+# riassunto (che si rigenerano dalla trascrizione) e mostrate in coda con il tag [aggiunta]
+# ---------------------------------------------------------------------------
+
+TAG_AGGIUNTA = "[aggiunta]"
+TITOLO_AGGIUNTE = "## Aggiunte dalla chat"
+
+
+def aggiungi(slug: str, nome: str, voci: list) -> int:
+    """Segna le voci nuove (testo con la fonte) in coda alle aggiunte della sessione; restituisce quante."""
+    path = file_sessione(progetti.cartella(slug), nome)["aggiunte"]
+    gia = leggi(path).casefold()
+    adesso = f"{datetime.datetime.now():%d/%m %H:%M}"
+    nuove = [v for v in voci if v.casefold() not in gia]
+    if nuove:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.writelines(f"- {TAG_AGGIUNTA} {v} *({adesso})*\n" for v in nuove)
+    return len(nuove)
+
+
+def con_aggiunte(testo: str, aggiunte: str) -> str:
+    """Il documento con le aggiunte in fondo, in una sezione a parte."""
+    if not aggiunte.strip():
+        return testo
+    return f"{testo.rstrip()}\n\n---\n\n{TITOLO_AGGIUNTE}\n\n{aggiunte.strip()}\n"
 
 
 def leggi(path) -> str:
@@ -208,6 +242,8 @@ def md_in_html(testo: str) -> str:
     # i modelli a volte usano qualche tag di formattazione (es. <br> nelle tabelle): si accettano
     # solo questi, e solo senza attributi; qualsiasi altro HTML resta testo
     corpo = TAG_AMMESSI.sub(lambda m: "<br>" if m.group(2) == "br" else f"<{m.group(1)}{m.group(2)}>", corpo)
+    corpo = corpo.replace(TAG_AGGIUNTA, '<mark class="aggiunta" title="Non viene dalla trascrizione: '
+                          'l\'hai detto tu in chat o la chat l\'ha trovato su internet">aggiunta</mark>')
     return corpo.replace("<strong>[INCERTO]</strong>", '<mark class="incerto">INCERTO</mark>')
 
 
@@ -219,7 +255,10 @@ def documento(slug: str, nome: str, tipo: str) -> dict:
         testo = leggi(f["appunti"])
     else:
         raise ValueError(tipo)
-    return {"html": md_in_html(testo) if testo else "", "incerti": testo.count(INCERTO)}
+    aggiunte = leggi(f["aggiunte"])
+    testo = con_aggiunte(testo, aggiunte) if testo else ""
+    return {"html": md_in_html(testo) if testo else "", "incerti": testo.count(INCERTO),
+            "aggiunte": aggiunte.count(TAG_AGGIUNTA)}
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +373,9 @@ def cerca(query: str, slug: str = "", tipi=("trascrizione", "appunti", "riassunt
 def testo_per_pdf(slug: str, nome: str) -> tuple:
     """(titolo, markdown) del riassunto, o degli appunti se il riassunto non c'è ancora."""
     f = file_sessione(progetti.cartella(slug), nome)
+    aggiunte = leggi(f["aggiunte"])
     if f["riassunto"]:
-        return f["riassunto"].stem, leggi(f["riassunto"])
+        return f["riassunto"].stem, con_aggiunte(leggi(f["riassunto"]), aggiunte)
     if f["appunti"].exists():
-        return f["appunti"].stem, leggi(f["appunti"])
+        return f["appunti"].stem, con_aggiunte(leggi(f["appunti"]), aggiunte)
     return "", ""

@@ -366,6 +366,13 @@ mark.incerto {
   border-radius: var(--pill); font-size: 12px; font-weight: 700; padding: 1px 8px; white-space: nowrap;
 }
 mark.incerto.corrente { box-shadow: 0 0 0 3px var(--q-incerto); }
+mark.aggiunta {
+  background: color-mix(in srgb, var(--q-rumore) 18%, transparent); color: inherit;
+  border-radius: 4px; padding: 0 5px; font-size: .85em; font-weight: 600;
+}
+.segnate { margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: 8px; font-size: 13px;
+  background: color-mix(in srgb, var(--q-rumore) 8%, transparent); }
+.segnate ul { margin: 4px 0; padding-left: 18px; }
 
 /* minuta */
 .minuta { max-width: 90ch; }

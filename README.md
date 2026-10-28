@@ -74,7 +74,15 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 7. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
 8. **Archiviare:** nel progetto, menu **⋯** → *Archivia* (i file restano dove sono; *Ripristina* lo riporta).
    Gli archiviati si vedono spuntando **archiviati (N)** nella riga dei progetti in home; non compaiono nella combobox di avvio.
-9. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
+9. **Chat**: domande sulle tue sessioni. Risponde dai tuoi documenti (cita le fonti) e li approfondisce con
+   Wikipedia; se le dici qualcosa che i documenti non sanno, o se aggiunge un approfondimento da internet,
+   **se lo segna** negli appunti della sessione (quella scelta nella chat, altrimenti la più pertinente).
+
+   **Il tag `[aggiunta]`** segna queste informazioni: non vengono dalla trascrizione ma dalla chat
+   («detto in chat») o da internet (con il link della fonte). Stanno in `storico/Aggiunte AAAA-MM-GG HH.MM.md`
+   e si vedono in fondo ad appunti, riassunto, PDF e Markdown, nella sezione *Aggiunte dalla chat*:
+   restano separate dal riassunto della trascrizione e non lo fanno rigenerare. Per correggerne o toglierne una
+   si modifica quel file.
 
 ## Altri fornitori e AI locale (facoltativo)
 

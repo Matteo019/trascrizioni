@@ -1300,6 +1300,8 @@ async function schedaDocumento(slug, nome, tipo, s) {
   }
   box.innerHTML = `<article class="documento">${doc.html}</article>`;
   $("#incerti-box").innerHTML = `
+    ${doc.aggiunte ? `<div class="etichetta-lato">Aggiunte dalla chat: ${intero(doc.aggiunte)}</div>
+      <p class="secondario piccolo">${LEGENDA_AGGIUNTA}</p>` : ""}
     <div class="etichetta-lato">Passaggi [INCERTO]: ${intero(doc.incerti)}</div>
     ${doc.incerti ? `<div class="azioni"><button class="btn piccolo" id="inc-prec" aria-label="Precedente">←</button>
       <button class="btn piccolo" id="inc-succ" aria-label="Successivo">→</button>
@@ -1475,6 +1477,11 @@ async function vistaCerca(query) {
    Chat
    =================================================================== */
 
+// spiegazione del tag, mostrata accanto ai documenti e nella chat (non dentro gli appunti)
+const LEGENDA_AGGIUNTA = `<mark class="aggiunta">aggiunta</mark> = informazione che non viene dalla trascrizione:
+  l'hai detta tu in chat, oppure la chat l'ha trovata su internet (la fonte è tra parentesi).
+  Sta in fondo, separata, e non cambia il riassunto.`;
+
 const ESEMPI_CHAT = [
   "Quali sono gli argomenti principali trattati?",
   "Cosa è stato chiesto o promesso?",
@@ -1533,12 +1540,20 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   const fontiHtml = fonti => !fonti?.length ? "" : `<div class="fonti">${fonti.map((f, i) =>
     `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))}</a>`).join("")}</div>`;
 
+  const webHtml = web => !web?.length ? "" : `<div class="fonti"><span class="secondario">Internet:</span>${web.map(w =>
+    `<a class="fonte" href="${esc(w.link)}" target="_blank" rel="noopener">${esc(w.titolo)}</a>`).join("")}</div>`;
+  const segnateHtml = s => !s ? "" : `<div class="segnate">
+      <strong>${s.sessione ? (s.nuove ? `Segnato negli appunti (${s.nuove})` : "Già negli appunti") : "Non segnato: scegli un progetto o una sessione"}</strong>
+      ${s.sessione ? ` · <a href="#/p/${enc(s.progetto)}/s/${s.sessione}?tab=appunti">apri</a>` : ""}
+      <ul>${s.voci.map(v => `<li><mark class="aggiunta">aggiunta</mark> ${esc(v)}</li>`).join("")}</ul>
+      <span class="secondario piccolo">${LEGENDA_AGGIUNTA}</span></div>`;
+
   const htmlMessaggio = m => m.ruolo === "utente"
     ? `<div class="msg utente"><div class="bolla">${esc(m.testo)}</div><div class="msg-meta">${oraBreve(m.ora)}</div></div>`
     : `<div class="msg ${m.errore ? "errore" : "assistente"}">
         <div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
         <div class="msg-corpo">
-          <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}</div>
+          <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}${webHtml(m.web)}${segnateHtml(m.segnate)}</div>
           <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · Ha risposto <strong>${esc(m.modello)}</strong> in ${m.secondi} s` : ""}${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} non ha risposto, saltato` : ""}</div>
         </div>
       </div>`;
@@ -1583,7 +1598,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     aggiungi(msgUtente);
     // "sta scrivendo…": tre puntini come nelle chat online
     lista.insertAdjacentHTML("beforeend", `<div class="msg assistente digitando"><div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
-      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo stato-attesa">Cerco nei tuoi documenti…</span></div></div>`);
+      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo stato-attesa">Cerco nei tuoi documenti e su internet…</span></div></div>`);
     const digitando = lista.lastElementChild;
     // attesa visibile: secondi che passano e cosa sta succedendo (il modello lento viene saltato da solo)
     const partenza = Date.now();
@@ -1591,7 +1606,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
       const s = Math.round((Date.now() - partenza) / 1000);
       const el = digitando.querySelector(".stato-attesa");
       if (!el) return clearInterval(contatore);
-      el.textContent = s < 15 ? `Cerco nei tuoi documenti… ${s} s`
+      el.textContent = s < 15 ? `Cerco nei tuoi documenti e su internet… ${s} s`
         : s < 40 ? `Il modello ci sta mettendo un po'… ${s} s`
         : `Il modello non risponde: provo con un altro… ${s} s`;
     }, 1000);
@@ -1600,7 +1615,7 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     let risposta;
     try {
       const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess, modello } });
-      risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati, ora: new Date().toISOString() };
+      risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, web: r.web, segnate: r.segnate, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati, ora: new Date().toISOString() };
     } catch (e) {
       risposta = { ruolo: "assistente", testo: e.message, errore: true, ora: new Date().toISOString() };
     }
