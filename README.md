@@ -92,7 +92,7 @@ quelli dei fornitori pronti sono già compilati e si possono correggere.
 
 | Riassunti e chat | Trascrizione |
 |---|---|
-| NVIDIA (predefinito), OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter | Groq (predefinito), OpenAI |
+| NVIDIA (predefinito), Groq (chiave a parte, es. `openai/gpt-oss-120b`), OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter | Groq (predefinito), OpenAI |
 | AI locale: Ollama (`http://localhost:11434/v1`), LM Studio (`http://localhost:1234/v1`) | Whisper locale (es. Speaches, `http://localhost:8000/v1`) |
 | Personalizzato: qualsiasi indirizzo compatibile OpenAI | |
 

@@ -1,7 +1,7 @@
 """
 Motori AI. Di base: Groq per la trascrizione, NVIDIA per riassunti e chat (API key gratuite).
 In alternativa, dalle Impostazioni, un altro fornitore con API compatibile OpenAI:
-OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter, un'AI locale
+Groq (con una sua chiave, anche di un altro account), OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter, un'AI locale
 (Ollama, LM Studio: niente esce dal PC) o un indirizzo personalizzato.
 
 Le scelte stanno in .env e si leggono a ogni uso:
@@ -18,6 +18,9 @@ import os
 FORNITORI = {
     "nvidia": {"nome": "NVIDIA (gratuito)", "url": "https://integrate.api.nvidia.com/v1", "chiave": "NVIDIA_API_KEY",
                "modello": "", "sito": "https://build.nvidia.com"},
+    # chiave a parte da quella della trascrizione: può essere di un altro account, con limiti suoi
+    "groq": {"nome": "Groq (gratuito)", "url": "https://api.groq.com/openai/v1", "chiave": "GROQ_TESTO_API_KEY",
+             "modello": "openai/gpt-oss-120b", "sito": "https://console.groq.com/keys"},
     "openai": {"nome": "OpenAI (GPT)", "url": "https://api.openai.com/v1", "chiave": "OPENAI_API_KEY",
                "modello": "gpt-4.1-mini", "sito": "https://platform.openai.com/api-keys"},
     "gemini": {"nome": "Google Gemini", "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
