@@ -12,12 +12,14 @@ Progetto personale, fornito così com'è (licenza MIT), senza garanzie né suppo
 
 | | Microfono | Audio del PC |
 |---|---|---|
-| Per | lezione dal vivo, chi parla nella stanza | YouTube, video, qualsiasi audio che il PC riproduce |
-| Dispositivo | il microfono scelto (interno, cuffie, USB…) | le casse o le cuffie da cui esce l'audio |
+| Per | lezione dal vivo, chi parla nella stanza | YouTube, video, Teams, qualsiasi audio che il PC riproduce |
+| Dispositivo | il microfono scelto (interno, cuffie, USB…) | **dove lo ascolti**: cuffie, casse, oppure *non lo ascolto* |
 | Audio salvato | sempre, compresso Opus (~14 MB l'ora) | solo se lo chiedi |
 
-L'audio del PC si cattura direttamente (WASAPI loopback): **non serve nessun cavo virtuale**,
-guardi il video normalmente e intanto viene trascritto.
+Per l'audio del PC scegli solo dove ascoltarlo: da dove leggerlo lo decide il programma.
+Di solito lo cattura direttamente (WASAPI loopback, **nessun cavo virtuale**). Sui PC aziendali dove la
+registrazione diretta è bloccata, imposta l'uscita audio di Windows su **«CABLE Input»** ([VB-CABLE](https://vb-audio.com/Cable/)):
+il programma se ne accorge, legge l'audio dal cavo e lo rimanda alle cuffie scelte, così lo senti lo stesso.
 
 **Lingua:** *Italiano* va bene anche quando si parla italiano con molti termini inglesi
 (scrivili nel glossario del progetto perché Whisper li scriva giusti). *Inglese* per video o
@@ -54,7 +56,7 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 ## Uso
 
 1. Doppio clic su **`avvia_dashboard.bat`**: al primo avvio installa le dipendenze, poi apre
-   http://127.0.0.1:8765 nel browser. Le chiavi (o un altro fornitore) si inseriscono in **Impostazioni**.
+   http://127.0.0.1:8765 nel browser. Le chiavi e i modelli si inseriscono in **Impostazioni**.
 2. **Home, niente in corso:** al centro ci sono i tasti **Microfono** e **Audio del PC**. Il pannello che si apre chiede:
    - il **dispositivo** (il predefinito di Windows è già selezionato) e la **lingua**;
    - il **progetto**: uno esistente dalla combobox, oppure *+ Nuovo progetto…* per crearlo al volo
@@ -74,25 +76,42 @@ progetti/<progetto>/     output, un progetto per corso o serie di video (mai su 
 7. **Ferma** chiude in modo ordinato; **Chiudi subito** interrompe senza perdere testo già scritto.
 8. **Archiviare:** nel progetto, menu **⋯** → *Archivia* (i file restano dove sono; *Ripristina* lo riporta).
    Gli archiviati si vedono spuntando **archiviati (N)** nella riga dei progetti in home; non compaiono nella combobox di avvio.
-9. **Chat**: domande sulle tue sessioni; risponde solo dai tuoi documenti e cita le fonti.
+9. **Chat**: domande sulle tue sessioni. Risponde dai tuoi documenti (cita le fonti) e li approfondisce con
+   Wikipedia; se le dici qualcosa che i documenti non sanno, o se aggiunge un approfondimento da internet,
+   **se lo segna** negli appunti della sessione (quella scelta nella chat, altrimenti la più pertinente).
 
-## Altri fornitori e AI locale (facoltativo)
+   **Il tag `[aggiunta]`** segna queste informazioni: non vengono dalla trascrizione ma dalla chat
+   («detto in chat») o da internet (con il link della fonte). Stanno in `storico/Aggiunte AAAA-MM-GG HH.MM.md`
+   e si vedono in fondo ad appunti, riassunto, PDF e Markdown, nella sezione *Aggiunte dalla chat*:
+   restano separate dal riassunto della trascrizione e non lo fanno rigenerare. Per correggerne o toglierne una
+   si modifica quel file.
 
-Di base si usano Groq e NVIDIA, con chiavi gratuite. In **Impostazioni** scegli, separatamente per
-trascrizione e per riassunti e chat, un altro fornitore. Per ognuno ci sono **indirizzo (endpoint), API key e modello**:
-quelli dei fornitori pronti sono già compilati e si possono correggere.
+## Chiavi e modelli (Impostazioni)
 
-| Riassunti e chat | Trascrizione |
-|---|---|
-| NVIDIA (predefinito), OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter | Groq (predefinito), OpenAI |
-| AI locale: Ollama (`http://localhost:11434/v1`), LM Studio (`http://localhost:1234/v1`) | Whisper locale (es. Speaches, `http://localhost:8000/v1`) |
-| Personalizzato: qualsiasi indirizzo compatibile OpenAI | |
+Le Impostazioni hanno due passi:
 
-- Gemini, Claude e DeepSeek non offrono la trascrizione audio: per quella resta Groq, OpenAI o un Whisper locale.
+1. **Le tue chiavi**: una riga per account, con fornitore, un nome a scelta e la chiave. Puoi avere più chiavi
+   dello stesso fornitore (es. due account Groq) e servizi senza chiave (AI locale, Whisper su questo PC).
+2. **A cosa serve ogni chiave**: per **Trascrizione**, **Riassunti** e **Chat** scegli una chiave e il modello
+   (si propone quello consigliato). La stessa chiave può servirle tutte e tre, oppure ognuna ha la sua:
+   così, per esempio, le domande in chat non consumano i limiti gratuiti dei riassunti.
+
+| Fornitore | Testo (riassunti, chat) | Trascrizione |
+|---|---|---|
+| Groq (gratuito) | `openai/gpt-oss-120b` | `whisper-large-v3-turbo` |
+| NVIDIA (gratuito) | `nvidia/nemotron-3-ultra-550b-a55b` | — |
+| OpenAI | `gpt-4.1-mini` | `whisper-1` |
+| Google Gemini, Anthropic Claude, DeepSeek, Mistral, OpenRouter | sì | — |
+| AI locale: Ollama (`http://localhost:11434/v1`), LM Studio (`http://localhost:1234/v1`) | sì | — |
+| Whisper locale (es. Speaches, `http://localhost:8000/v1`), Whisper su questo PC | — | sì |
+| Personalizzato: qualsiasi indirizzo compatibile OpenAI | sì | sì |
+
 - I nomi dei modelli cambiano spesso: se un fornitore risponde «modello non trovato», correggilo nelle Impostazioni.
 - AI locale: niente esce dal PC e la chiave non serve. Per i riassunti lunghi alza il contesto del modello ad
-  almeno 16k token (Ollama: `OLLAMA_CONTEXT_LENGTH=16384`). Sul solo processore conviene un Whisper piccolo (`small`, `medium`).
-- Le chiavi restano in `.env` sul tuo PC (mai su git, mai rimandate al browser).
+  almeno 16k token (Ollama: `OLLAMA_CONTEXT_LENGTH=16384`). Sul solo processore conviene un Whisper piccolo (`small`).
+- Groq gratuito ha limiti bassi di token al minuto: va bene per la chat, i riassunti lunghi possono superarli.
+- Le chiavi restano in `.env` sul tuo PC; elenco e scelte in `ai.json` (entrambi mai su git, mai rimandati al browser).
+  La prima volta le vecchie impostazioni di `.env` vengono riprese da sole.
 
 ## Note
 

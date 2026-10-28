@@ -735,8 +735,8 @@ async function vistaProgetti(query) {
   ogni(4000, aggiornaLive);
 }
 
-const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (YouTube, video)"],
-  ["chiamata", "Chiamata con cavo virtuale (PC aziendale)"]];
+// «chiamata» (cavo virtuale) non si sceglie più: l'audio del PC passa dal cavo da solo se serve
+const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio del PC (video, Teams, YouTube)"]];
 const ICONE_SORGENTE = {
   microfono: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 17v-5l4-1v5"/><circle cx="9" cy="17" r="1"/><circle cx="13" cy="16" r="1"/></svg>',
@@ -745,22 +745,33 @@ const ICONE_SORGENTE = {
 const LINGUE = [["it", "Italiano (anche con termini inglesi)"], ["en", "Inglese"], ["auto", "Automatica (lingue diverse, non mescolate)"]];
 const TIPI_SESSIONE = [["", "Scrivo io il contesto"], ["lezione", "Lezione dal vivo"], ["video", "Video (YouTube…)"], ["riunione", "Riunione / chiamata"]];
 
-/* opzioni della combobox: il predefinito di Windows per primo, quello salvato anche se ora è scollegato */
+/*
+ * Opzioni della combobox. Microfono: da quale si registra. Audio del PC: dove lo ascolti (cuffie, casse
+ * o nessuno); da dove leggerlo lo decide il programma (cavo virtuale se è l'uscita di Windows).
+ * Quello salvato resta in elenco anche se ora è scollegato.
+ */
 async function opzioniDispositivo(sorgente, scelto = "") {
+  if (sorgente === "chiamata") sorgente = "pc";
   const d = await api(`/api/dispositivi/${sorgente}`).catch(e => ({ nomi: [], predefinito: "", errore: e.message }));
-  // CABLE Input = solo registrazione: l'audio va nel cavo e non lo si rimanda a nessuna cuffia
-  const nome = n => sorgente === "pc" && /cable/i.test(n) ? `${n} (solo registrazione, non si sente)` : n;
-  const opzioni = [["", `Predefinito di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, nome(n)])];
-  if (sorgente === "chiamata") opzioni.push(["__muto", "Nessuna: non la sento, solo registrazione"]);
-  if (scelto && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
-  return { opzioni, errore: d.errore };
+  let opzioni, nota = "";
+  if (sorgente === "microfono") {
+    opzioni = [["", `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
+  } else {
+    const cavo = /cable/i.test(d.predefinito);
+    opzioni = [["", cavo ? "Automatico: le cuffie collegate" : `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`],
+      ...d.nomi.filter(n => !/cable/i.test(n)).map(n => [n, n]),
+      ["__muto", "Non lo ascolto (solo registrazione)"]];
+    nota = cavo ? "L'uscita di Windows è il cavo virtuale: l'audio passa da lì e lo senti dove scegli qui." : "";
+  }
+  if (scelto && !/cable/i.test(scelto) && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
+  return { opzioni, errore: d.errore, nota };
 }
 
 /* avvio dalla home: dispositivo, lingua e progetto, poi una sessione nuova */
 async function avvioRapido(sorgente, progetti) {
   const attivi = progetti.filter(p => p.stato !== "archiviato");
   // si propone l'ultimo progetto usato con la stessa sorgente
-  const simile = attivi.find(p => p.sorgente === sorgente);
+  const simile = attivi.find(p => (p.sorgente === "chiamata" ? "pc" : p.sorgente) === sorgente);
   const { opzioni, errore } = await opzioniDispositivo(sorgente, simile?.dispositivo || "");
   if (errore) toast(errore, "errore");
   const nuovo = "__nuovo";
@@ -770,9 +781,10 @@ async function avvioRapido(sorgente, progetti) {
     titolo, conferma: "Avvia",
     testo: sorgente === "microfono"
       ? "L'audio della lezione si salva anche nella cartella del progetto, compresso (~14 MB l'ora)."
-      : "Fai partire il video normalmente: viene trascritto quello che esce dal dispositivo scelto.",
+      : "Fai partire il video o la chiamata normalmente: viene trascritto quello che il PC fa sentire.",
     campi: [
-      { id: "dispositivo", label: sorgente === "microfono" ? "Microfono" : "Audio che esce da", opzioni, valore: simile?.dispositivo || "" },
+      { id: "dispositivo", label: sorgente === "microfono" ? "Microfono" : "Dove lo ascolti", opzioni,
+        valore: opzioni.some(([o]) => o === simile?.dispositivo) ? simile.dispositivo : "" },
       { id: "lingua", label: "Lingua", opzioni: LINGUE, valore: simile?.lingua || "it" },
       { id: "progetto", label: "Progetto", opzioni: [...attivi.map(p => [p.slug, p.nome]), [nuovo, "+ Nuovo progetto…"]],
         valore: simile?.slug || (attivi.length ? attivi[0].slug : nuovo), cambia: mostraNome },
@@ -1159,16 +1171,15 @@ function pannelloProcesso(slug, tipo, box, progetto = {}, sessioneAperta = "") {
     // il dispositivo scelto vale per la sua sorgente: cambiando sorgente si riparte dal predefinito
     const caricaDispositivi = async scelto => {
       const mic = campo("sorgente").value === "microfono";
-      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono"
-        : campo("sorgente").value === "chiamata" ? "Sentila su (cuffie)" : "Audio che esce da";
+      $(".etichetta-dispositivo", sa).textContent = mic ? "Microfono" : "Dove lo ascolti";
       $(".solo-pc", sa).hidden = mic;
       $(".info-extra", box).textContent = mic ? "L'audio si salva anche, compresso" : "";
-      const { opzioni, errore } = await opzioniDispositivo(campo("sorgente").value, scelto);
+      const { opzioni, errore, nota } = await opzioniDispositivo(campo("sorgente").value, scelto);
       campo("dispositivo").innerHTML = opzioni.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
-      campo("dispositivo").value = scelto;
-      if (errore) $(".info-extra", box).textContent = errore;
+      campo("dispositivo").value = opzioni.some(([v]) => v === scelto) ? scelto : "";
+      if (errore || nota) $(".info-extra", box).textContent = errore || nota;
     };
-    campo("sorgente").value = progetto.sorgente || "pc";
+    campo("sorgente").value = progetto.sorgente === "microfono" ? "microfono" : "pc";
     campo("lingua").value = progetto.lingua || "it";
     campo("salva_audio").checked = !!progetto.salva_audio;
     caricaDispositivi(progetto.dispositivo || "");
@@ -1300,6 +1311,8 @@ async function schedaDocumento(slug, nome, tipo, s) {
   }
   box.innerHTML = `<article class="documento">${doc.html}</article>`;
   $("#incerti-box").innerHTML = `
+    ${doc.aggiunte ? `<div class="etichetta-lato">Aggiunte dalla chat: ${intero(doc.aggiunte)}</div>
+      <p class="secondario piccolo">${LEGENDA_AGGIUNTA}</p>` : ""}
     <div class="etichetta-lato">Passaggi [INCERTO]: ${intero(doc.incerti)}</div>
     ${doc.incerti ? `<div class="azioni"><button class="btn piccolo" id="inc-prec" aria-label="Precedente">←</button>
       <button class="btn piccolo" id="inc-succ" aria-label="Successivo">→</button>
@@ -1475,6 +1488,11 @@ async function vistaCerca(query) {
    Chat
    =================================================================== */
 
+// spiegazione del tag, mostrata accanto ai documenti e nella chat (non dentro gli appunti)
+const LEGENDA_AGGIUNTA = `<mark class="aggiunta">aggiunta</mark> = informazione che non viene dalla trascrizione:
+  l'hai detta tu in chat, oppure la chat l'ha trovata su internet (la fonte è tra parentesi).
+  Sta in fondo, separata, e non cambia il riassunto.`;
+
 const ESEMPI_CHAT = [
   "Quali sono gli argomenti principali trattati?",
   "Cosa è stato chiesto o promesso?",
@@ -1491,9 +1509,8 @@ const oraBreve = iso => { const d = iso ? new Date(iso) : new Date(); return `${
  * La conversazione resta salvata per ambito (progetto + sessione) finché il browser è aperto.
  */
 async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmbito, domanda = "" }) {
-  const [progetti, catalogo] = await Promise.all([api("/api/progetti"), api("/api/chat/modelli")]);
-  let modello = memoria("chat-modello") || catalogo.predefinito;
-  if (!catalogo.modelli.some(m => m.id === modello)) modello = catalogo.predefinito;
+  // il modello non si sceglie qui: è quello impostato per la Chat nelle Impostazioni
+  const progetti = await api("/api/progetti");
   const progetto = prog ? await api(`/api/progetti/${enc(prog)}`).catch(() => null) : null;
   const chiave = `chat:${prog}:${sess}`;
   let storico = [];
@@ -1512,12 +1529,6 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
           ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
         </select>
         <span class="spazio"></span>
-        <div class="gruppo-modello">
-          <select class="scelta-modello" aria-label="Modello che risponde">
-            ${catalogo.modelli.map(m => `<option value="${esc(m.id)}" ${m.id === modello ? "selected" : ""}>${esc(m.nome)} · ${esc(m.autore)}</option>`).join("")}
-          </select>
-          ${compatta ? "" : `<div class="modello-info"></div>`}
-        </div>
         <button class="btn fantasma piccolo nuova" type="button" title="Nuova conversazione">Nuova</button>
       </div>
       <div class="messaggi" aria-live="polite"></div>
@@ -1533,13 +1544,21 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   const fontiHtml = fonti => !fonti?.length ? "" : `<div class="fonti">${fonti.map((f, i) =>
     `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))}</a>`).join("")}</div>`;
 
+  const webHtml = web => !web?.length ? "" : `<div class="fonti"><span class="secondario">Internet:</span>${web.map(w =>
+    `<a class="fonte" href="${esc(w.link)}" target="_blank" rel="noopener">${esc(w.titolo)}</a>`).join("")}</div>`;
+  const segnateHtml = s => !s ? "" : `<div class="segnate">
+      <strong>${s.sessione ? (s.nuove ? `Segnato negli appunti (${s.nuove})` : "Già negli appunti") : "Non segnato: scegli un progetto o una sessione"}</strong>
+      ${s.sessione ? ` · <a href="#/p/${enc(s.progetto)}/s/${s.sessione}?tab=appunti">apri</a>` : ""}
+      <ul>${s.voci.map(v => `<li><mark class="aggiunta">aggiunta</mark> ${esc(v)}</li>`).join("")}</ul>
+      <span class="secondario piccolo">${LEGENDA_AGGIUNTA}</span></div>`;
+
   const htmlMessaggio = m => m.ruolo === "utente"
     ? `<div class="msg utente"><div class="bolla">${esc(m.testo)}</div><div class="msg-meta">${oraBreve(m.ora)}</div></div>`
     : `<div class="msg ${m.errore ? "errore" : "assistente"}">
         <div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
         <div class="msg-corpo">
-          <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}</div>
-          <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · Ha risposto <strong>${esc(m.modello)}</strong> in ${m.secondi} s` : ""}${m.saltati?.length ? ` · ${esc(m.saltati.join(", "))} non ha risposto, saltato` : ""}</div>
+          <div class="bolla documento">${m.errore ? esc(m.testo) : m.html}${fontiHtml(m.fonti)}${webHtml(m.web)}${segnateHtml(m.segnate)}</div>
+          <div class="msg-meta">${oraBreve(m.ora)}${m.modello ? ` · Ha risposto <strong>${esc(m.modello)}</strong> in ${m.secondi} s` : ""}</div>
         </div>
       </div>`;
 
@@ -1583,24 +1602,23 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     aggiungi(msgUtente);
     // "sta scrivendo…": tre puntini come nelle chat online
     lista.insertAdjacentHTML("beforeend", `<div class="msg assistente digitando"><div class="avatar-ai" aria-hidden="true">${ICONA_AI}</div>
-      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo stato-attesa">Cerco nei tuoi documenti…</span></div></div>`);
+      <div class="bolla"><span class="puntini"><i></i><i></i><i></i></span><span class="secondario piccolo stato-attesa">Cerco nei tuoi documenti e su internet…</span></div></div>`);
     const digitando = lista.lastElementChild;
-    // attesa visibile: secondi che passano e cosa sta succedendo (il modello lento viene saltato da solo)
+    // attesa visibile: secondi che passano e cosa sta succedendo
     const partenza = Date.now();
     const contatore = setInterval(() => {
       const s = Math.round((Date.now() - partenza) / 1000);
       const el = digitando.querySelector(".stato-attesa");
       if (!el) return clearInterval(contatore);
-      el.textContent = s < 15 ? `Cerco nei tuoi documenti… ${s} s`
-        : s < 40 ? `Il modello ci sta mettendo un po'… ${s} s`
-        : `Il modello non risponde: provo con un altro… ${s} s`;
+      el.textContent = s < 15 ? `Cerco nei tuoi documenti e su internet… ${s} s`
+        : `Il modello ci sta mettendo un po'… ${s} s`;
     }, 1000);
     window.effetti?.messaggio(digitando);
     lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
     let risposta;
     try {
-      const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess, modello } });
-      risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, modello: r.nome_modello, secondi: r.secondi, saltati: r.saltati, ora: new Date().toISOString() };
+      const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess } });
+      risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, web: r.web, segnate: r.segnate, modello: r.nome_modello, secondi: r.secondi, ora: new Date().toISOString() };
     } catch (e) {
       risposta = { ruolo: "assistente", testo: e.message, errore: true, ora: new Date().toISOString() };
     }
@@ -1625,25 +1643,6 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   campo.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); invia(); }
   });
-  const descriviModello = () => {
-    const info = q(".modello-info");
-    if (!info) return;
-    const m = catalogo.modelli.find(x => x.id === modello);
-    info.innerHTML = m.punti.map(p => `<span class="tag successo">${esc(p)}</span>`).join("");
-  };
-  q(".scelta-modello").onchange = e => { modello = e.target.value; memoria("chat-modello", modello); descriviModello(); };
-  descriviModello();
-  api("/api/chat/stato").then(stato => {
-    if (!document.body.contains(lista)) return;
-    for (const o of q(".scelta-modello").options) {
-      const m = catalogo.modelli.find(x => x.id === o.value);
-      o.textContent = `${m.nome} · ${m.autore}${stato[o.value] === false ? " — lento ora" : ""}`;
-    }
-    if (stato[modello] === false) {
-      const buono = catalogo.modelli.find(x => stato[x.id]);
-      if (buono) { modello = buono.id; q(".scelta-modello").value = modello; descriviModello(); }
-    }
-  }).catch(() => {});
   q(".nuova").onclick = () => { storico = []; memorizza(); disegnaTutto(); campo.focus(); };
   q(".ambito-progetto").onchange = e => cambiaAmbito(e.target.value, "");
   q(".ambito-sessione").onchange = e => cambiaAmbito(prog, e.target.value);
@@ -1795,72 +1794,88 @@ async function vistaCalendario(query) {
 async function vistaImpostazioni(query) {
   const [i, progetti] = await Promise.all([api("/api/impostazioni"), api("/api/progetti")]);
   const progScelto = progetti.some(p => p.slug === query.get("progetto")) ? query.get("progetto") : (progetti[0]?.slug || "");
-  // ogni fornitore: indirizzo (endpoint), chiave e modello. I campi hanno data-v (impostazione) o
-  // data-chiave (API key): la stessa chiave può comparire in due blocchi (es. OpenAI per trascrizione e testo).
-  const val = k => i.valori[k] || i.predefiniti?.[k] || "";
-  const F = i.fornitori;
-  const campoChiave = (k, sito, facoltativa = false) => `
-    <div class="campo">
-      <label>API key ${i.chiavi[k] ? '<span class="tag successo">Impostata</span>'
-        : facoltativa ? '<span class="tag">facoltativa</span>' : '<span class="tag pericolo">Mancante</span>'}</label>
-      <input type="password" data-chiave="${k}" autocomplete="off" aria-label="API key"
-        placeholder="${i.chiavi[k] ? "••••••••  vuoto = non cambiare" : "Incolla la chiave"}">
-      ${sito ? `<div class="aiuto"><a href="${sito}" target="_blank" rel="noopener">${sito.replace("https://", "")}</a></div>` : ""}
+  // due passi: le chiavi (account, anche più dello stesso fornitore) e a cosa serve ognuna.
+  // Una chiave può servire trascrizione, riassunti e chat insieme, oppure ognuno ha la sua.
+  const FORN = Object.fromEntries(i.fornitori.map(f => [f.id, f]));
+  const chiavi = i.chiavi.map(c => ({ ...c }));
+  const usi = Object.fromEntries(Object.keys(i.nomi_usi).map(u => [u, { chiave: "", modello: "", ...(i.usi[u] || {}) }]));
+  const valoriChiavi = {};          // chiavi scritte ora: vanno al server solo al Salva
+  const consigliato = (idChiave, uso) => {
+    const c = chiavi.find(x => x.id === idChiave);
+    return c ? (FORN[c.fornitore][i.tipi_usi[uso]] || "") : "";
+  };
+  const AIUTI_URL = {
+    locale: "Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1. Per i riassunti lunghi alza il contesto ad almeno 16k (Ollama: OLLAMA_CONTEXT_LENGTH=16384).",
+    whisper_locale: "Es. Speaches / faster-whisper-server: http://localhost:8000/v1",
+    personalizzato: "Qualsiasi servizio con API compatibile OpenAI (…/v1).",
+  };
+
+  const rigaChiave = c => {
+    const f = FORN[c.fornitore];
+    const stato = f.chiave === "no" ? '<span class="tag">nessuna chiave</span>'
+      : c.ha_chiave || valoriChiavi[c.id] ? '<span class="tag successo">Impostata</span>'
+      : f.chiave === "facoltativa" ? '<span class="tag">facoltativa</span>' : '<span class="tag pericolo">Mancante</span>';
+    return `<div class="riga-chiave" data-id="${esc(c.id)}">
+      <select data-campo="fornitore" aria-label="Fornitore">${i.fornitori.map(x =>
+        `<option value="${x.id}" ${x.id === c.fornitore ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>
+      <input type="text" data-campo="nome" value="${esc(c.nome)}" aria-label="Nome" placeholder="Nome (es. Groq lavoro)">
+      ${f.chiave === "no" ? "<span></span>" : `<input type="password" data-campo="chiave" autocomplete="off" aria-label="API key"
+        value="${esc(valoriChiavi[c.id] || "")}" placeholder="${c.ha_chiave ? "••••••••  vuoto = non cambiare" : "Incolla la chiave"}">`}
+      ${stato}
+      <button class="btn fantasma piccolo" type="button" data-togli title="Togli questa chiave" aria-label="Togli">✕</button>
+      ${f.url_libero ? `<div class="riga-sotto"><input type="text" data-campo="url" value="${esc(c.url || "")}" aria-label="Indirizzo"
+        placeholder="Indirizzo (endpoint), es. ${esc(f.url || "https://…/v1")}"><div class="aiuto">${esc(AIUTI_URL[c.fornitore] || "")}</div></div>`
+      : f.sito && !c.ha_chiave ? `<div class="riga-sotto aiuto">La chiave si crea su <a href="${f.sito}" target="_blank" rel="noopener">${f.sito.replace("https://", "")}</a></div>` : ""}
     </div>`;
-  const campoTesto = (k, nome, aiuto = "") => k ? `
-    <div class="campo">
-      <label>${nome}</label>
-      <input type="text" data-v="${k}" value="${esc(val(k))}" autocomplete="off" aria-label="${nome}"
-        placeholder="${esc(i.predefiniti?.[k] || "")}">
-      ${aiuto ? `<div class="aiuto">${esc(aiuto)}</div>` : ""}
-    </div>` : "";
-  const AIUTO_LOCALE = "Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1. Per i riassunti lunghi alza il contesto del modello ad almeno 16k (in Ollama: OLLAMA_CONTEXT_LENGTH=16384).";
-  const scelta = (k, titolo, voci, blocco) => `
-    <div class="c6 motore">
-      <h3 class="card-titolo" style="margin-bottom:16px">${titolo}</h3>
-      <div class="campo">
-        <label for="${k}">Fornitore</label>
-        <select id="${k}">${voci.map(v => `<option value="${v.id}" ${v.id === val(k) ? "selected" : ""}>${esc(v.nome)}${v.id === i.predefiniti[k] ? " — predefinito" : ""}</option>`).join("")}</select>
-      </div>
-      ${voci.map(v => `<div class="blocco-fornitore" data-per="${v.id}" ${v.id === val(k) ? "" : "hidden"}>${blocco(v)}</div>`).join("")}
+  };
+
+  const rigaUso = u => {
+    const tipo = i.tipi_usi[u];
+    const adatte = chiavi.filter(c => FORN[c.fornitore][tipo] !== null);
+    const scelta = chiavi.find(c => c.id === usi[u].chiave);
+    const pc = scelta?.fornitore === "pc";
+    return `<div class="riga-uso" data-uso="${u}">
+      <strong>${esc(i.nomi_usi[u])}</strong>
+      <select data-campo="chiave" aria-label="Chiave per ${esc(i.nomi_usi[u])}">
+        ${scelta ? "" : '<option value="" selected>Scegli una chiave…</option>'}
+        ${adatte.map(c => `<option value="${esc(c.id)}" ${c.id === usi[u].chiave ? "selected" : ""}>${esc(c.nome || FORN[c.fornitore].nome)}</option>`).join("")}
+      </select>
+      ${pc ? `<select data-campo="modello" aria-label="Modello">${i.modelli_pc.map(m =>
+          `<option value="${m}" ${m === usi[u].modello ? "selected" : ""}>${m === "small" ? "small — più veloce, ~0,7 GB di RAM" : `${m} — più preciso, ~2 GB di RAM`}</option>`).join("")}</select>`
+        : `<input type="text" data-campo="modello" value="${esc(usi[u].modello)}" aria-label="Modello"
+          placeholder="${esc(consigliato(usi[u].chiave, u) || "Nome del modello")}">`}
     </div>`;
-  const modelloPC = val("WHISPER_PC_MODELLO");
-  const sezioneTrascrizione = scelta("AI_TRASCRIZIONE", "Trascrizione", F.trascrizione, v =>
-    v.id === "pc" ? `
-      <div class="campo">
-        <label>Modello</label>
-        <select data-v="WHISPER_PC_MODELLO" aria-label="Modello">
-          ${[["large-v3-turbo", "large-v3-turbo — più preciso, ~2 GB di RAM"], ["small", "small — più veloce, ~0,7 GB di RAM"]]
-            .map(([m, t]) => `<option value="${m}" ${m === modelloPC ? "selected" : ""}>${t}</option>`).join("")}
-        </select>
-        <div class="aiuto">Gira dentro il programma, senza server da avviare: l'audio non esce dal PC.
-          Al primo uso il modello viene scaricato (small ~0,5 GB, turbo ~1,6 GB). Se la trascrizione resta indietro, usa small.</div>
-      </div>`
-    : v.id === "locale"
-      ? campoTesto("WHISPER_LOCALE_URL", "Indirizzo (endpoint)") +
-        campoTesto("WHISPER_LOCALE_MODELLO", "Modello", "Es. Speaches / faster-whisper-server. Sul solo processore un modello più piccolo (small, medium) è molto più veloce.")
-      : campoChiave(v.chiave, v.sito) + (v.id === "openai" ? campoTesto("MODELLO_TRASCRIZIONE_OPENAI", "Modello", "Es. whisper-1, gpt-4o-transcribe") : ""));
-  const sezioneTesto = scelta("AI_TESTO", "Riassunti e chat", F.testo, v =>
-    campoTesto(v.var_url, "Indirizzo (endpoint)", v.id === "locale" ? AIUTO_LOCALE
-      : v.id === "personalizzato" ? "Qualsiasi servizio con API compatibile OpenAI (…/v1)." : "") +
-    (v.chiave ? campoChiave(v.chiave, v.sito, v.chiave_facoltativa) : "") +
-    campoTesto(v.var_modello, "Modello", v.id === "personalizzato" ? "" : "Il nome consigliato si può cambiare: i fornitori aggiornano spesso i modelli.") +
-    (v.id === "nvidia" ? '<div class="aiuto">Usa diversi modelli gratuiti e passa da solo al successivo se uno è fermo.</div>' : ""));
+  };
+
+  const disegnaAI = () => {
+    $("#ai-chiavi").innerHTML = chiavi.length ? chiavi.map(rigaChiave).join("")
+      : '<div class="aiuto">Nessuna chiave: aggiungine una qui sotto.</div>';
+    $("#ai-usi").innerHTML = Object.keys(i.nomi_usi).map(rigaUso).join("");
+  };
+  const AI_HTML = `
+    <div class="c12">
+      <h3 class="card-titolo">1 · Le tue chiavi</h3>
+      <p class="aiuto">Una riga per account. Puoi avere più chiavi dello stesso fornitore (es. due account Groq).
+        Le chiavi restano nel file .env sul tuo PC.</p>
+      <div id="ai-chiavi"></div>
+      <button class="btn piccolo" type="button" id="aggiungi-chiave">+ Aggiungi chiave</button>
+    </div>
+    <div class="c12">
+      <h3 class="card-titolo">2 · A cosa serve ogni chiave</h3>
+      <p class="aiuto">Per ogni funzione scegli una chiave e il modello. La stessa chiave può servirne più di una.</p>
+      <div id="ai-usi"></div>
+    </div>`;
 
   vista.innerHTML = `
     ${hero("Impostazioni")}
     <div class="sotto-hero">
       <div class="pannello riempi-max">
         <div class="pannello-corpo griglia scorre">
-          <div class="c12 aiuto" id="sezione-ai">Di base si usano Groq e NVIDIA (chiavi gratuite). Puoi scegliere un altro fornitore
-            (OpenAI, Gemini, Claude, DeepSeek, Mistral, OpenRouter), un'AI locale che gira sul PC (niente esce dal computer)
-            o qualsiasi indirizzo compatibile OpenAI. Microfono, audio del PC e lingua si scelgono per ogni progetto.</div>
-          ${sezioneTrascrizione}
-          ${sezioneTesto}
+          <div class="c12 griglia" id="sezione-ai-box" style="gap:var(--sp-5)">${AI_HTML}</div>
           <div class="c6">
             <div class="campo">
               <label for="RIASSUNTO_INTERVALLO_MINUTI">Riassunto ogni (minuti)</label>
-              <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.valori.RIASSUNTO_INTERVALLO_MINUTI)}" placeholder="10" style="max-width:120px">
+              <input type="text" inputmode="decimal" id="RIASSUNTO_INTERVALLO_MINUTI" value="${esc(i.intervallo)}" placeholder="10" style="max-width:120px">
             </div>
           </div>
           ${progetti.length ? `<div class="c12" id="sezione-contesto">
@@ -1883,12 +1898,10 @@ async function vistaImpostazioni(query) {
 
   const salva = async () => {
     const body = {
-      // una chiave scritta in uno qualsiasi dei suoi campi; vuoto = non cambiare
-      chiavi: Object.fromEntries($$("[data-chiave]").filter(c => c.value.trim()).map(c => [c.dataset.chiave, c.value])),
-      valori: {
-        ...Object.fromEntries($$("[data-v]").map(c => [c.dataset.v, c.value])),
-        ...Object.fromEntries(["RIASSUNTO_INTERVALLO_MINUTI", "AI_TRASCRIZIONE", "AI_TESTO"].map(k => [k, $(`#${k}`).value])),
-      },
+      chiavi: chiavi.map(({ id, fornitore, nome, url }) => ({ id, fornitore, nome, url })),
+      usi,
+      valori_chiavi: valoriChiavi,        // vuoto = la chiave resta com'è
+      intervallo: $("#RIASSUNTO_INTERVALLO_MINUTI").value,
     };
     try {
       // un solo Salva per tutto: impostazioni, contesto e glossario del progetto scelto
@@ -1899,8 +1912,53 @@ async function vistaImpostazioni(query) {
     } catch (e) { toast(e.message, "errore"); }
   };
   $("#salva").onclick = salva;
-  $$(".motore > .campo select").forEach(s => s.onchange = () => {
-    $$(".blocco-fornitore", s.closest(".motore")).forEach(b => b.hidden = b.dataset.per !== s.value);
+  disegnaAI();
+  $("#aggiungi-chiave").onclick = () => {
+    const stessi = chiavi.filter(c => c.fornitore === "groq").length;
+    chiavi.push({ id: `n${Date.now()}`, fornitore: "groq", nome: stessi ? `Groq (${stessi + 1})` : "Groq", url: "", ha_chiave: false });
+    disegnaAI();
+    $("#ai-chiavi .riga-chiave:last-child [data-campo=chiave]")?.focus();
+  };
+  // un solo gestore per tutte le righe: aggiorna lo stato e ridisegna quando cambia la struttura
+  $("#sezione-ai-box").addEventListener("input", e => {
+    const campo = e.target.dataset.campo;
+    const riga = e.target.closest(".riga-chiave"), rigaU = e.target.closest(".riga-uso");
+    if (riga && campo !== "fornitore") {
+      const c = chiavi.find(x => x.id === riga.dataset.id);
+      if (campo === "chiave") valoriChiavi[c.id] = e.target.value; else c[campo] = e.target.value;
+      if (campo === "nome") $("#ai-usi").innerHTML = Object.keys(i.nomi_usi).map(rigaUso).join("");
+    } else if (rigaU && campo === "modello") usi[rigaU.dataset.uso].modello = e.target.value;
+  });
+  $("#sezione-ai-box").addEventListener("change", e => {
+    const campo = e.target.dataset.campo;
+    const riga = e.target.closest(".riga-chiave"), rigaU = e.target.closest(".riga-uso");
+    if (riga && campo === "fornitore") {
+      const c = chiavi.find(x => x.id === riga.dataset.id);
+      const prima = FORN[c.fornitore];
+      if (!c.nome || c.nome === prima.nome) c.nome = FORN[e.target.value].nome;
+      c.fornitore = e.target.value;
+      c.url = FORN[c.fornitore].url_libero ? FORN[c.fornitore].url : "";
+      c.ha_chiave = false;
+      // gli usi che non può più fare restano da scegliere
+      for (const u in usi) if (usi[u].chiave === c.id && FORN[c.fornitore][i.tipi_usi[u]] === null) usi[u] = { chiave: "", modello: "" };
+      disegnaAI();
+    } else if (rigaU && campo === "chiave") {
+      const u = rigaU.dataset.uso, prima = consigliato(usi[u].chiave, u);
+      usi[u].chiave = e.target.value;
+      // modello vuoto o quello consigliato per la chiave di prima: si propone quello della nuova
+      if (!usi[u].modello || usi[u].modello === prima) usi[u].modello = consigliato(usi[u].chiave, u);
+      disegnaAI();
+    } else if (rigaU && campo === "modello") usi[rigaU.dataset.uso].modello = e.target.value;
+  });
+  $("#sezione-ai-box").addEventListener("click", e => {
+    const riga = e.target.closest("[data-togli]")?.closest(".riga-chiave");
+    if (!riga) return;
+    const c = chiavi.find(x => x.id === riga.dataset.id);
+    const usata = Object.keys(usi).filter(u => usi[u].chiave === c.id).map(u => i.nomi_usi[u]);
+    if (usata.length && !confirm(`«${c.nome}» serve per: ${usata.join(", ")}. Toglierla?`)) return;
+    chiavi.splice(chiavi.indexOf(c), 1);
+    for (const u in usi) if (usi[u].chiave === c.id) usi[u] = { chiave: "", modello: "" };
+    disegnaAI();
   });
   let contesto = null;
   const caricaContesto = async slug => {

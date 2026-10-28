@@ -366,6 +366,13 @@ mark.incerto {
   border-radius: var(--pill); font-size: 12px; font-weight: 700; padding: 1px 8px; white-space: nowrap;
 }
 mark.incerto.corrente { box-shadow: 0 0 0 3px var(--q-incerto); }
+mark.aggiunta {
+  background: color-mix(in srgb, var(--q-rumore) 18%, transparent); color: inherit;
+  border-radius: 4px; padding: 0 5px; font-size: .85em; font-weight: 600;
+}
+.segnate { margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: 8px; font-size: 13px;
+  background: color-mix(in srgb, var(--q-rumore) 8%, transparent); }
+.segnate ul { margin: 4px 0; padding-left: 18px; }
 
 /* minuta */
 .minuta { max-width: 90ch; }
@@ -1347,3 +1354,14 @@ body.home .header { display: none; }
 .barra-visibile::-webkit-scrollbar-thumb { background-color: var(--line-strong); }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--ink-700); }
 ::-webkit-scrollbar-button, ::-webkit-scrollbar-corner { display: none; background: transparent; }
+
+/* Impostazioni: chiavi e a cosa servono */
+.riga-chiave { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(120px, 1fr) minmax(160px, 1.4fr) auto auto;
+  gap: var(--sp-2); align-items: center; padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+.riga-chiave .riga-sotto { grid-column: 1 / -1; }
+.riga-uso { display: grid; grid-template-columns: 120px minmax(160px, 1fr) minmax(180px, 1.4fr); gap: var(--sp-2);
+  align-items: center; padding: var(--sp-2) 0; }
+#ai-chiavi { margin-bottom: var(--sp-3); }
+@media (max-width: 720px) {
+  .riga-chiave, .riga-uso { grid-template-columns: 1fr; }
+}

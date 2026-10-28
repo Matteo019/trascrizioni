@@ -4,8 +4,12 @@ Trascrizione real-time dal microfono (lezione dal vivo) o dall'audio del PC (You
 Sorgenti (SORGENTE):
   microfono  il microfono scelto (DISPOSITIVO=<parte del nome>, vuoto = predefinito di Windows).
              L'audio intero si salva anche in progetti/<slug>/audio/ (Opus, ~14 MB l'ora): la lezione non si ripete.
-  pc         quello che esce dalle casse o dalle cuffie scelte (WASAPI loopback, senza cavi virtuali):
-             guardi il video normalmente e intanto viene trascritto.
+  pc         quello che il PC fa sentire (video, YouTube, Teams...). DISPOSITIVO = dove lo ascolti
+             (cuffie, casse; «__muto» = non lo ascolto). Il modo di leggerlo si sceglie da solo:
+             - uscita di Windows sul cavo virtuale «CABLE Input» (PC aziendali, dove la registrazione
+               diretta è bloccata): si legge da «CABLE Output» e si rimanda a DISPOSITIVO per sentirlo;
+             - altrimenti si registra direttamente quello che esce da DISPOSITIVO (WASAPI loopback).
+             «chiamata», il nome vecchio della prima strada, vale come «pc».
   file       un file audio già registrato (FILE_AUDIO=<percorso>: m4a, mp3, wav, ogg, anche video):
              stessa trascrizione delle chiamate, a fine file il processo si chiude da solo.
 Lingua (LINGUA): it (predefinita, va bene anche con termini inglesi), en, oppure auto.
@@ -34,7 +38,7 @@ import numpy as np
 import soundfile as sf
 
 from comune import (argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc,
-                    FILE_SESSIONE_IN_SCRITTURA)
+                    dispositivi, FILE_SESSIONE_IN_SCRITTURA)
 import motori
 
 # ---------------------------------------------------------------------------
@@ -45,7 +49,7 @@ import motori
 # se nessuno si ferma, a MAX_CHUNK_SECONDS si taglia nel punto più silenzioso e il resto passa al blocco dopo.
 # ~45-60s -> ~600 richieste in 9 ore (limite free Groq: 2000/giorno).
 # Whisper su questo PC: ~30s, la finestra fissa dell'encoder (blocchi più corti costano quanto 30s).
-if motori.fornitore_trascrizione() == "pc":
+if motori.uso("trascrizione")["fornitore"] == "pc":
     MIN_CHUNK_SECONDS, MAX_CHUNK_SECONDS = 25, 30
 else:
     MIN_CHUNK_SECONDS, MAX_CHUNK_SECONDS = 45, 60
@@ -65,12 +69,11 @@ SORGENTE = os.environ.get("SORGENTE", "pc").strip().lower()
 if SORGENTE not in SILENCE_RMS:
     SORGENTE = "pc"
 DA_MICROFONO = SORGENTE == "microfono"
-# chiamata: VB-CABLE + ascolto in cuffia (PC aziendali); DISPOSITIVO sono le cuffie su cui sentirla
-DA_CHIAMATA = SORGENTE == "chiamata"
 DA_FILE = SORGENTE == "file"
 FILE_AUDIO = os.environ.get("FILE_AUDIO", "").strip()
 DISPOSITIVO_HINT = os.environ.get("DISPOSITIVO", "").strip()
-MUTO = "__muto"   # scelta «non la sento»: solo registrazione
+MUTO = "__muto"   # scelta «non lo ascolto»: solo registrazione
+via_cavo = False  # l'audio del PC arriva dal cavo virtuale: manda dati anche nel silenzio
 # "it" anche per l'italiano pieno di termini inglesi: con "auto" Whisper sceglie una lingua per blocco
 # e a volte prende per inglese un blocco italiano, traducendolo.
 LINGUA = os.environ.get("LINGUA", "it").strip().lower() or "it"
@@ -82,9 +85,8 @@ SOGLIA_SILENZIO = SILENCE_RMS[SORGENTE]
 # large-v3 è più preciso sull'italiano; i limiti gratuiti Groq sono per modello,
 # quindi se large-v3 fallisce (es. 429) lo stesso blocco passa subito a turbo.
 # Con OpenAI o il Whisper locale c'è un solo modello, quello scelto nelle Impostazioni.
-WHISPER_MODELS = motori.modelli_trascrizione([m.strip() for m in os.environ.get(
-    "WHISPER_MODEL", "whisper-large-v3,whisper-large-v3-turbo").split(",") if m.strip()])
-MOTORE = motori.nome_trascrizione()
+WHISPER_MODELS = [motori.modello("trascrizione")]
+MOTORE = motori.nome("trascrizione")
 
 # Frasi che Whisper "inventa" sul silenzio o sul rumore
 HALLUCINATIONS = {
@@ -176,33 +178,29 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
     Restituisce (stream, nome). Gli errori di apertura (dispositivo scollegato, bloccato da
     Windows o da un software di sicurezza) salgono a chi chiama con un messaggio leggibile.
     """
-    if DA_CHIAMATA:
+    global via_cavo
+    callback = lambda data, rate: raw.put(in_stereo_48k(data, rate))
+    if DA_MICROFONO:
+        return apri_microfono(DISPOSITIVO_HINT, callback)
+    # dove lo si ascolta: la scelta della dashboard (il cavo stesso = non lo si sente)
+    ascolto = "" if DISPOSITIVO_HINT == MUTO or "cable" in DISPOSITIVO_HINT.lower() else DISPOSITIVO_HINT
+    via_cavo = "cable" in dispositivi("pc")["predefinito"].lower()
+    if via_cavo:
         from chiamata import apri_chiamata, cuffie
-        # «non la sento» è una scelta, non un errore: nessun ascolto e nessun avviso
-        ascolto = ("" if DISPOSITIVO_HINT == MUTO
-                   else DISPOSITIVO_HINT or cuffie()["predefinito"])
-        return apri_chiamata(ascolto, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
-    apri = apri_microfono if DA_MICROFONO else apri_audio_pc
-    try:
-        return apri(DISPOSITIVO_HINT, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
-    except RuntimeError as exc:
-        # uscita di Windows sul cavo virtuale («CABLE Input»): il suo loopback spesso non si apre,
-        # ma lo stesso audio si legge dall'altro capo del cavo («CABLE Output»)
-        if DA_MICROFONO or "cable" not in str(exc).lower():
-            raise
-        from chiamata import apri_chiamata, cuffie
-        # dove rimandarlo per sentirlo: le casse/cuffie scelte nella combobox; scelto proprio il cavo
-        # = solo registrazione, non si sente nulla; predefinito = cuffie collegate, se non ce ne sono
-        # nessun ascolto (mai le casse senza che le si scelga)
-        if DISPOSITIVO_HINT:
-            ascolto = "" if "cable" in DISPOSITIVO_HINT.lower() or DISPOSITIVO_HINT == MUTO else DISPOSITIVO_HINT
-        else:
+        if not ascolto and DISPOSITIVO_HINT != MUTO:
+            # predefinito: le cuffie collegate, se ci sono (mai le casse senza che le si scelga)
             ascolto = next((n for n in cuffie()["nomi"]
                             if re.search(r"cuffie|headphone|headset|airpods", n, re.I)), "")
-        stream, nome = apri_chiamata(ascolto, lambda data, rate: raw.put(in_stereo_48k(data, rate)))
+        stream, nome = apri_chiamata(ascolto, callback)
         print(f"[INFO] L'uscita audio di Windows è il cavo virtuale: leggo da «CABLE Output»"
               f"{f' e lo faccio sentire su «{ascolto}»' if ascolto else ' (solo registrazione, non lo faccio sentire)'}.")
         return stream, nome
+    try:
+        return apri_audio_pc(ascolto, callback)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{str(exc).splitlines()[0]} Se su questo PC la registrazione diretta è bloccata "
+                           "(PC aziendale), imposta l'uscita audio di Windows su «CABLE Input»: "
+                           "lo sentirai lo stesso sul dispositivo scelto.") from exc
 
 
 def block_rms(data: np.ndarray) -> float:
@@ -295,7 +293,7 @@ def capture_audio():
             stop_event.wait(RIPROVA_SECONDI)
             continue
         print(f"[AUDIO] {'Cattura da' if primo else 'Cattura ripristinata:'} {nome}"
-              f" ({'microfono' if DA_MICROFONO else 'chiamata, cavo virtuale' if DA_CHIAMATA else 'audio del PC'}) · lingua: {LINGUA}")
+              f" ({'microfono' if DA_MICROFONO else 'audio del PC, cavo virtuale' if via_cavo else 'audio del PC'}) · lingua: {LINGUA}")
         primo = False
         ultimo_audio = time.time()
         try:
@@ -304,9 +302,9 @@ def capture_audio():
                     data = raw.get(timeout=0.5)
                 except queue.Empty:
                     # microfono e cavo mandano dati anche nel silenzio: se smettono, la cattura è bloccata
-                    if DA_MICROFONO or DA_CHIAMATA:
+                    if DA_MICROFONO or via_cavo:
                         if time.time() - ultimo_audio > SENZA_AUDIO_SECONDI:
-                            print(f"[ERRORE] Dal {'cavo virtuale' if DA_CHIAMATA else 'microfono'} non arriva più "
+                            print(f"[ERRORE] Dal {'cavo virtuale' if via_cavo else 'microfono'} non arriva più "
                                   f"audio da {SENZA_AUDIO_SECONDI} s: lo riapro.")
                             break
                     else:
@@ -505,8 +503,7 @@ def main():
     # così il riassunto non archivia né cancella il file prima che venga aperto
     segnalibro = PROGETTO_DIR / FILE_SESSIONE_IN_SCRITTURA
     segnalibro.write_text(SESSION_NAME, encoding="utf-8")
-    if motori.fornitore_trascrizione() != "groq":
-        print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
+    print(f"[INFO] Trascrizione con {MOTORE}: {WHISPER_MODELS[0]}")
     retry_failed(groq_client)
 
     print(f"[INFO] Trascrizione: {TRANSCRIPT_PATH}")
