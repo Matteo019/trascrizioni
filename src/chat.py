@@ -17,12 +17,6 @@ import sessioni
 
 # modelli gratuiti dell'endpoint NVIDIA tra cui si sceglie nella chat
 MODELLI = [
-    {"id": "openai/gpt-oss-20b", "nome": "GPT-OSS 20B", "autore": "OpenAI",
-     "descrizione": "Piccolo e rapidissimo, solo testo. Bravo in ragionamenti brevi e calcoli: ideale per domande puntuali.",
-     "punti": ["Il più veloce", "Logica e calcoli"]},
-    {"id": "google/gemma-4-31b-it", "nome": "Gemma 4 31B", "autore": "Google",
-     "descrizione": "Equilibrato: ragiona bene e risponde in modo ordinato. Va bene per quasi tutte le domande.",
-     "punti": ["Equilibrato"]},
     {"id": "nvidia/nemotron-3-ultra-550b-a55b", "nome": "Nemotron 3 Ultra", "autore": "NVIDIA",
      "descrizione": "Il più potente: ragionamento profondo e contesto lunghissimo, per domande complesse. Più lento, e condivide i limiti con i riassunti.",
      "punti": ["Massima qualità", "Più lento"]},

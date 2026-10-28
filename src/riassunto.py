@@ -49,8 +49,8 @@ TIMEOUT_SECONDI = 300
 # Con un altro fornitore (o l'AI locale) c'è un solo modello, quello scelto nelle Impostazioni.
 MODELLI = motori.modelli_testo([m.strip() for m in os.environ.get(
     "NEMOTRON_MODEL",
-    # super-120b non è più disponibile sull'account (404); gpt-oss risponde in pochi secondi
-    "nvidia/nemotron-3-ultra-550b-a55b,openai/gpt-oss-20b,nvidia/nemotron-3.5-lightning-30b-a3b",
+    # super-120b non è più disponibile sull'account (404); gpt-oss saltava sempre
+    "nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3.5-lightning-30b-a3b",
 ).split(",") if m.strip()])
 MOTORE = motori.nome_testo()
 
