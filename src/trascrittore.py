@@ -34,7 +34,7 @@ import numpy as np
 import soundfile as sf
 
 from comune import (argomento_progetto, path_progetto, stop_richiesto, apri_microfono, apri_audio_pc,
-                    FILE_SESSIONE_IN_SCRITTURA)
+                    dispositivi, FILE_SESSIONE_IN_SCRITTURA)
 import motori
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,10 @@ def apri_sorgente(raw: "queue.Queue[np.ndarray]"):
     except RuntimeError as exc:
         # uscita di Windows sul cavo virtuale («CABLE Input»): il suo loopback spesso non si apre,
         # ma lo stesso audio si legge dall'altro capo del cavo («CABLE Output»)
-        if DA_MICROFONO or "cable" not in str(exc).lower():
+        # vale anche se nella combobox sono state scelte le cuffie: con l'uscita sul cavo il loro
+        # loopback non si apre (e non riceverebbe nulla), l'audio passa tutto dal cavo
+        if DA_MICROFONO or ("cable" not in str(exc).lower()
+                            and "cable" not in dispositivi("pc")["predefinito"].lower()):
             raise
         from chiamata import apri_chiamata, cuffie
         # dove rimandarlo per sentirlo: le casse/cuffie scelte nella combobox; scelto proprio il cavo
