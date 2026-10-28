@@ -17,10 +17,13 @@ import motori
 import progetti
 import sessioni
 
-# al modello vanno solo le sezioni che servono: poche, brevi, e la risposta arriva in fretta
-MAX_CARATTERI_CONTESTO = 12000
-MAX_SEZIONI = 8
-MAX_CARATTERI_SEZIONE = 3000
+# al modello vanno solo le sezioni che servono: poche e brevi, per non saturare i token al minuto (Groq gratuito: 8.000)
+MAX_CARATTERI_CONTESTO = 5000
+MAX_SEZIONI = 4
+MAX_CARATTERI_SEZIONE = 1500
+MAX_CARATTERI_CONTESTO_PROGETTO = 2000
+MAX_TOKEN_SALUTO = 120
+MAX_TOKEN_RISPOSTA = 800
 TIMEOUT_SECONDI = 100
 
 PAROLE_VUOTE = set("""il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cui non come
@@ -31,14 +34,24 @@ essere stato detto dice spiegato spiega parlato""".split())
 
 SEPARATORE_APPUNTI = "===APPUNTI==="
 
-SISTEMA = """Sei l'assistente di chi segue queste sessioni (lezioni, video, corsi, riunioni...).
-Rispondi in italiano, in Markdown, in modo chiaro e pratico. Solo Markdown: mai tag HTML (per andare a capo in una tabella usa ";").
-Le fonti sono tre, da non confondere:
-- i DOCUMENTI delle sessioni (riassunti, appunti, trascrizioni): citali tra parentesi quadre, es. [2];
-- le PAGINE WEB qui sotto: usale per approfondire quello che i documenti dicono, citandole con il link;
-- quello che l'utente ti dice nella conversazione: è attendibile, anche se corregge i documenti.
-Se la risposta non c'è in nessuna fonte, dillo chiaramente; non inventare mai.
-I passaggi segnati [INCERTO] vanno riportati come incerti. Le righe [aggiunta] le aveva già segnate la chat.
+SISTEMA = """Sei l'assistente dedicato a questo corso e ai documenti delle sue sessioni (lezioni, video, riunioni...).
+Rispondi in italiano, in Markdown, in modo chiaro, sintetico e pratico. Solo Markdown: mai tag HTML (per andare a capo in una tabella usa ";").
+
+CONTESTO DEL PROGETTO:
+{contesto}
+
+REGOLE (obbligatorie):
+1. AMBITO: rispondi solo a domande che riguardano gli argomenti delle sessioni e il contesto qui sopra.
+2. FUORI TEMA: se la richiesta non c'entra con il corso o il contesto (ricette, meteo, gossip, compiti non correlati,
+   cultura generale estranea, codice o argomenti non trattati) non rispondere: rifiuta con una sola frase,
+   "Posso rispondere solo a domande relative ai contenuti e al contesto di questo corso."
+3. SALUTI: se l'utente saluta o ringrazia, rispondi con cordialità in 1-2 frasi, ricordando a cosa servi.
+4. FONTI, da non confondere:
+   - i DOCUMENTI delle sessioni (riassunti, appunti, trascrizioni) vengono prima di tutto: citali tra parentesi quadre, es. [2];
+   - le PAGINE WEB qui sotto: citale con il link solo se le usi davvero; se non servono, ignorale;
+   - quello che l'utente ti dice nella conversazione: è attendibile, anche se corregge i documenti.
+5. FEDELTÀ: se la risposta non c'è in nessuna fonte, dillo chiaramente; non inventare mai.
+   I passaggi segnati [INCERTO] vanno riportati come incerti. Le righe [aggiunta] le aveva già segnate la chat.
 
 Dopo la risposta, se in questo scambio sono emerse informazioni NUOVE che i documenti non contengono
 (qualcosa che l'utente ti ha detto o corretto, o un approfondimento dalle pagine web che hai usato nella risposta),
@@ -54,9 +67,39 @@ PAGINE WEB:
 
 # approfondimenti da internet: Wikipedia ha un'API libera (i motori di ricerca bloccano le richieste automatiche)
 WIKIPEDIA = "https://it.wikipedia.org/w/api.php"
-MAX_PAGINE_WEB = 3
-MAX_CARATTERI_PAGINA = 1500
+MAX_PAGINE_WEB = 2
+MAX_CARATTERI_PAGINA = 800
 TIMEOUT_WEB_SECONDI = 8
+# internet si consulta solo se i documenti non hanno niente, o se lo chiede l'utente
+CHIEDE_WEB = re.compile(r"\b(internet|web|online|wikipedia|google|cerca su|cerca nel web)\b", re.IGNORECASE)
+
+# saluti e convenevoli: niente documenti, niente internet, risposta breve
+SALUTI = re.compile(
+    r"^\s*(?:ciao|buongiorno|buonasera|salve|buond[iì]|ehi|hey|hello|hi|"
+    r"grazie(?: mille)?|ti ringrazio|molte grazie|perfetto|ok|ottimo|va bene|"
+    r"chi sei(?:\s+tu)?|come ti chiami|cosa puoi fare|come funzioni|"
+    r"arrivederci|a presto|buona giornata|buon lavoro)(?:\s+(?:a tutti|tutti|grazie))?[.!?\s]*$",
+    re.IGNORECASE)
+
+
+def e_saluto(testo: str) -> bool:
+    """True se il messaggio è solo un saluto, un ringraziamento o un convenevole."""
+    return bool(SALUTI.match(testo))
+
+
+def contesto_progetto(slug: str = "") -> str:
+    """Il contesto.txt del progetto scelto, o quelli dei progetti attivi se non se n'è scelto uno."""
+    def leggi(progetto):
+        f = progetti.cartella(progetto) / "contesto.txt"
+        return f.read_text(encoding="utf-8").strip() if f.exists() else ""
+
+    if slug:
+        testo = leggi(slug)
+    else:
+        testo = "\n\n".join(f"Progetto «{info['nome']}»:\n{t}" for info, t in
+                            ((progetti.leggi_info(p), leggi(p)) for p in progetti.elenco())
+                            if info["stato"] != "archiviato" and t)
+    return testo[:MAX_CARATTERI_CONTESTO_PROGETTO] or "(nessun contesto specifico impostato)"
 
 
 def radici(testo: str) -> set:
@@ -212,6 +255,19 @@ def cerca_web(domanda: str) -> list:
              "testo": p.get("extract", "")[:MAX_CARATTERI_PAGINA]} for p in pagine if p.get("extract")]
 
 
+def pagine_web_utili(risposta: str, pagine: list) -> list:
+    """Solo le pagine che la risposta cita davvero (link, titolo o tutte le parole del titolo): le altre non si mostrano."""
+    testo = risposta.casefold()
+    utili = []
+    for p in pagine:
+        link, titolo = p.get("link", "").casefold(), p.get("titolo", "").casefold()
+        parole = [w for w in re.findall(r"[\wà-ù'-]{4,}", titolo) if w not in PAROLE_VUOTE]
+        citata = (link and (link in testo or urllib.parse.unquote(link) in testo)) or (titolo and titolo in testo)
+        if citata or (len(parole) >= 2 and all(w in testo for w in parole)):
+            utili.append(p)
+    return utili
+
+
 def separa_aggiunte(testo: str) -> tuple:
     """(risposta da mostrare, [voci nuove da segnare]) dalla risposta del modello."""
     risposta, _, coda = testo.partition(SEPARATORE_APPUNTI)
@@ -278,8 +334,9 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
 
     specifiche = {r for r in peso if r not in GENERICHE}
     candidati = sorted(((punteggio(s), i, s) for i, s in enumerate(sezioni)), key=lambda c: (-c[0], c[1]))
-    if not specifiche and not cerca_incerti or not candidati or candidati[0][0] == 0:
-        # domanda generale: la mappa di ogni sessione invece di sezioni a caso
+    # domanda generale (panoramica, sintesi): la mappa di ogni sessione invece di sezioni a caso.
+    # Serve almeno una parola "generale" nella domanda: "ciao" o parole che non compaiono in nessun documento non lo sono.
+    if any(r in GENERICHE for r in cercate) and not specifiche and not cerca_incerti:
         scelti, totale = [], 0
         for d in documenti:
             pezzo = panoramica(d["testo"]) if d["tipo"] != "trascrizione" else d["testo"][:MAX_CARATTERI_SEZIONE]
@@ -289,7 +346,7 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
             totale += len(pezzo)
         return scelti
 
-    scelti, totale = [], 0
+    scelti, totale = [], 0      # nessuna sezione con punteggio > 0: nessun documento pertinente
     for p, _, (d, titolo, corpo, _, _) in candidati:
         if p <= 0 or len(scelti) >= MAX_SEZIONI:
             break
@@ -302,11 +359,16 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
 
 def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") -> dict:
     modello = motori.modello("chat")
-    # le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?")
-    testo_ricerca = " ".join([m["testo"] for m in storico[-4:] if m.get("ruolo") == "utente"] + [domanda])
-    pezzi = scegli_pezzi(testo_ricerca, slug, sessione)
-    web = cerca_web(domanda)
-    if not pezzi and not web and not slug:
+    saluto = e_saluto(domanda)
+    pezzi, web = [], []
+    if not saluto:
+        # prima i documenti; le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?")
+        testo_ricerca = " ".join([m["testo"] for m in storico[-4:] if m.get("ruolo") == "utente"] + [domanda])
+        pezzi = scegli_pezzi(testo_ricerca, slug, sessione)
+        # internet solo se i documenti non hanno niente, o se l'utente lo chiede
+        if not pezzi or CHIEDE_WEB.search(domanda):
+            web = cerca_web(domanda)
+    if not pezzi and not web and not slug and not saluto:
         return {"risposta": "Non ho trovato nei documenti né su internet niente che riguardi questa domanda. "
                             "Prova con altre parole, o scegli un progetto.", "fonti": []}
 
@@ -323,18 +385,20 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
 
     pagine = "\n\n".join(f"{p['titolo']} ({p['link']})\n{p['testo']}" for p in web)
     messaggi = [{"role": "system", "content": SISTEMA.format(
-        documenti=documenti or "(nessun documento pertinente)", web=pagine or "(nessuna pagina trovata)",
-        separatore=SEPARATORE_APPUNTI)}]
+        contesto=contesto_progetto(slug), documenti=documenti or "(nessun documento pertinente)",
+        web=pagine or "(nessuna pagina consultata)", separatore=SEPARATORE_APPUNTI)}]
     # solo gli ultimi scambi, accorciati: servono a capire "e il secondo?", non a rimandare tutto
     for m in storico[-4:]:
         messaggi.append({"role": "user" if m.get("ruolo") == "utente" else "assistant",
                          "content": str(m.get("testo", ""))[:1500]})
     messaggi.append({"role": "user", "content": domanda})
 
+    # pochi token riservati per la risposta: con 3000 una sola chiamata esauriva i token al minuto di Groq
+    token_max = MAX_TOKEN_SALUTO if saluto else min(MAX_TOKEN_RISPOSTA, motori.max_token("chat", MAX_TOKEN_RISPOSTA))
     inizio = time.time()
     try:
         r = motori.client("chat", TIMEOUT_SECONDI).chat.completions.create(
-            model=modello, messages=messaggi, temperature=0.2, max_tokens=motori.max_token("chat", 3000))
+            model=modello, messages=messaggi, temperature=0.2, max_tokens=token_max)
         testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
     except RuntimeError:
         raise
@@ -346,6 +410,7 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
     if not testo:
         raise RuntimeError(f"{motori.nome('chat')} ha dato una risposta vuota: riprova tra poco.")
 
+    web = pagine_web_utili(testo, web)      # sotto la risposta solo le pagine che ha usato (anche solo negli appunti)
     testo, voci = separa_aggiunte(testo)
     segnate = None
     if voci:
