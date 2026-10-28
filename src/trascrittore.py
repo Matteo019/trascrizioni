@@ -6,6 +6,8 @@ Sorgenti (SORGENTE):
              L'audio intero si salva anche in progetti/<slug>/audio/ (Opus, ~14 MB l'ora): la lezione non si ripete.
   pc         quello che esce dalle casse o dalle cuffie scelte (WASAPI loopback, senza cavi virtuali):
              guardi il video normalmente e intanto viene trascritto.
+  file       un file audio già registrato (FILE_AUDIO=<percorso>: m4a, mp3, wav, ogg, anche video):
+             stessa trascrizione delle chiamate, a fine file il processo si chiude da solo.
 Lingua (LINGUA): it (predefinita, va bene anche con termini inglesi), en, oppure auto.
 
 Flusso: sorgente -> blocchi tagliati nelle pause -> Whisper (Groq, OpenAI, server locale o questo PC) -> progetti/<slug>/trascrizioni/trascrizione_X.txt
@@ -52,7 +54,7 @@ SAMPLE_RATE = 48000
 BLOCK = 1024
 WHISPER_RATE = 16000
 # l'audio del PC (digitale) e il microfono col docente lontano hanno volumi molto diversi
-SILENCE_RMS = {"pc": 300, "microfono": 30, "chiamata": 300}
+SILENCE_RMS = {"pc": 300, "microfono": 30, "chiamata": 300, "file": 30}
 GUADAGNO_MAX = 8.0          # amplificazione massima dei blocchi a basso volume prima di Whisper
 SENZA_AUDIO_SECONDI = 5     # il microfono manda dati anche nel silenzio: se smette, la cattura è bloccata
 RIPROVA_SECONDI = 3
@@ -65,6 +67,8 @@ if SORGENTE not in SILENCE_RMS:
 DA_MICROFONO = SORGENTE == "microfono"
 # chiamata: VB-CABLE + ascolto in cuffia (PC aziendali); DISPOSITIVO sono le cuffie su cui sentirla
 DA_CHIAMATA = SORGENTE == "chiamata"
+DA_FILE = SORGENTE == "file"
+FILE_AUDIO = os.environ.get("FILE_AUDIO", "").strip()
 DISPOSITIVO_HINT = os.environ.get("DISPOSITIVO", "").strip()
 MUTO = "__muto"   # scelta «non la sento»: solo registrazione
 # "it" anche per l'italiano pieno di termini inglesi: con "auto" Whisper sceglie una lingua per blocco
@@ -135,6 +139,10 @@ def sessione_da_usare() -> str:
 
 
 SESSION_NAME = sessione_da_usare()
+try:
+    INIZIO_FILE = datetime.datetime.strptime(SESSION_NAME, "%Y%m%d_%H%M%S")
+except ValueError:
+    INIZIO_FILE = datetime.datetime.now()
 TRANSCRIPT_PATH = OUT_DIR / f"trascrizione_{SESSION_NAME}.txt"
 FAILED_DIR = PROGETTO_DIR / "da_ritrascrivere"
 AUDIO_DIR = PROGETTO_DIR / "audio"
@@ -208,6 +216,31 @@ def find_cut(rms: list, min_blocks: int) -> int:
     return min_blocks + int(np.argmin(values[min_blocks:]))
 
 
+def leggi_file(aggiungi):
+    """Decodifica FILE_AUDIO (qualsiasi formato di ffmpeg, tramite PyAV) in blocchi stereo a 48 kHz."""
+    import av
+    resampler = av.AudioResampler(format="s16", layout="stereo", rate=SAMPLE_RATE)
+    resto = np.zeros((0, 2), dtype=np.int16)
+    with av.open(FILE_AUDIO) as contenitore:
+        flusso = contenitore.streams.audio[0]
+        durata = float(contenitore.duration / av.time_base) if contenitore.duration else 0
+        print(f"[AUDIO] File: {Path(FILE_AUDIO).name}"
+              f"{f' ({durata / 60:.0f} min)' if durata else ''} · lingua: {LINGUA}")
+        for frame in contenitore.decode(flusso):
+            if stop_event.is_set():
+                return
+            for f in resampler.resample(frame):
+                resto = np.concatenate([resto, f.to_ndarray().reshape(-1, 2)])
+            while len(resto) >= BLOCK:
+                aggiungi(resto[:BLOCK])
+                resto = resto[BLOCK:]
+        for f in resampler.resample(None):
+            resto = np.concatenate([resto, f.to_ndarray().reshape(-1, 2)])
+    while len(resto) >= BLOCK:
+        aggiungi(resto[:BLOCK])
+        resto = resto[BLOCK:]
+
+
 def capture_audio():
     raw: "queue.Queue[np.ndarray]" = queue.Queue()
     block_seconds = BLOCK / SAMPLE_RATE
@@ -220,14 +253,20 @@ def capture_audio():
     # l'audio del PC non manda nulla quando niente suona: quel tempo conta come silenzio
     silenzio = np.zeros((BLOCK, 2), dtype=np.int16)
 
+    letti = 0          # blocchi del file già passati: l'ora di un blocco è inizio sessione + posizione nel file
+
     def emit(cut: int):
         nonlocal blocks, rms
-        start = datetime.datetime.now() - datetime.timedelta(seconds=len(blocks) * block_seconds)
+        if DA_FILE:
+            start = INIZIO_FILE + datetime.timedelta(seconds=(letti - len(blocks)) * block_seconds)
+        else:
+            start = datetime.datetime.now() - datetime.timedelta(seconds=len(blocks) * block_seconds)
         audio_queue.put((np.concatenate(blocks[:cut]), start))
         blocks, rms = blocks[cut:], rms[cut:]
 
     def aggiungi(data: np.ndarray):
-        nonlocal quiet_run
+        nonlocal quiet_run, letti
+        letti += 1
         blocks.append(data)
         rms.append(block_rms(data))
         # pausa = volume molto sotto il livello medio del parlato di questo blocco
@@ -239,6 +278,13 @@ def capture_audio():
         elif len(blocks) >= max_blocks:
             emit(find_cut(rms, min_blocks))
             quiet_run = 0
+
+    if DA_FILE:
+        # il file si legge tutto in una volta: Whisper resta il collo di bottiglia, i blocchi aspettano in coda
+        leggi_file(aggiungi)
+        if blocks and not stop_event.is_set():
+            emit(len(blocks))
+        return
 
     primo = True
     while not stop_event.is_set():
@@ -499,6 +545,10 @@ def main():
                 try:
                     chunk, start = audio_queue.get(timeout=1)
                 except queue.Empty:
+                    if not cattura.is_alive() and DA_FILE:
+                        if FAILED_DIR.exists() and any(FAILED_DIR.glob(f"{SESSION_NAME}__*.wav")):
+                            retry_failed(groq_client, transcript)
+                        raise KeyboardInterrupt     # file finito: stessa chiusura ordinata di «Ferma»
                     if not cattura.is_alive():
                         # errore imprevisto nella cattura: si esce con errore, così la dashboard lo mostra
                         print("[ERRORE] La cattura audio si è fermata per un errore: riavvia la trascrizione.")

@@ -9,3 +9,4 @@ uvicorn==0.54.0
 markdown==3.11.2
 xhtml2pdf==0.2.26
 faster-whisper==1.2.1
+av==19.0.2

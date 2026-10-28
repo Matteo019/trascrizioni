@@ -600,12 +600,14 @@ async function vistaProgetti(query) {
     } else {
       box.innerHTML = `
         <div class="cr-sorgenti b-sorgenti" role="group" aria-label="Cosa vuoi trascrivere?">
-          ${[["microfono", "Microfono", "Lezione dal vivo"], ["pc", "Audio del PC", "YouTube, qualsiasi video"]].map(([k, nome, aiuto]) => `
+          ${[["microfono", "Microfono", "Lezione dal vivo"], ["pc", "Audio del PC", "YouTube, qualsiasi video"],
+            ["file", "File audio", "Una registrazione già fatta (m4a, mp3, wav...)"]].map(([k, nome, aiuto]) => `
             <button class="cr-sorgente" data-sorgente="${k}" title="${aiuto}">
               <span class="cr-icona-tondo" aria-hidden="true">${ICONE_SORGENTE[k]}</span><strong>${nome}</strong>
             </button>`).join("")}
         </div>`;
-      $$(".cr-sorgente", box).forEach(b => b.onclick = () => avvioRapido(b.dataset.sorgente, progetti));
+      $$(".cr-sorgente", box).forEach(b => b.onclick = () => b.dataset.sorgente === "file"
+        ? importaFile(progetti) : avvioRapido(b.dataset.sorgente, progetti));
     }
     window.effetti?.entrata(box.children);
   };
@@ -737,6 +739,7 @@ const SORGENTI = [["microfono", "Microfono (lezione dal vivo)"], ["pc", "Audio d
   ["chiamata", "Chiamata con cavo virtuale (PC aziendale)"]];
 const ICONE_SORGENTE = {
   microfono: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 17v-5l4-1v5"/><circle cx="9" cy="17" r="1"/><circle cx="13" cy="16" r="1"/></svg>',
   pc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m10 8 4 2-4 2z"/></svg>',
 };
 const LINGUE = [["it", "Italiano (anche con termini inglesi)"], ["en", "Inglese"], ["auto", "Automatica (lingue diverse, non mescolate)"]];
@@ -799,6 +802,50 @@ async function avvioRapido(sorgente, progetti) {
   } catch (e) { toast(e.message, "errore"); }
   // anche se l'avvio non riesce si apre il progetto: le scelte sono salvate e lì si riprova
   location.hash = `#/p/${enc(slug)}?tab=trascrizione`;
+}
+
+function scegliFile() {
+  return new Promise(ok => {
+    const input = Object.assign(document.createElement("input"), { type: "file", accept: "audio/*,video/*,.m4a" });
+    input.onchange = () => ok(input.files[0] || null);
+    input.click();
+  });
+}
+
+// una registrazione già fatta (es. dal telefono) diventa una sessione nuova, trascritta e riassunta
+async function importaFile(progetti) {
+  const file = await scegliFile();
+  if (!file) return;
+  const attivi = progetti.filter(p => p.stato !== "archiviato");
+  const nuovo = "__nuovo";
+  const mostraNome = v => { $("#dlg-nome").closest(".campo").hidden = v !== nuovo; };
+  const v = await dialogo({
+    titolo: "Trascrivi un file audio", conferma: "Avvia",
+    testo: `«${file.name}» (${(file.size / 1048576).toFixed(0)} MB): trascrizione e riassunto come per una chiamata.`,
+    campi: [
+      { id: "lingua", label: "Lingua", opzioni: LINGUE, valore: "it" },
+      { id: "progetto", label: "Progetto", opzioni: [...attivi.map(p => [p.slug, p.nome]), [nuovo, "+ Nuovo progetto…"]],
+        valore: attivi.length ? attivi[0].slug : nuovo, cambia: mostraNome },
+      { id: "nome", label: "Nome del nuovo progetto", segnaposto: "Es. Riunioni cliente" },
+    ],
+  }, () => mostraNome($("#dlg-progetto").value));
+  if (!v) return;
+  let slug = v.progetto;
+  try {
+    if (slug === nuovo) {
+      if (!v.nome.trim()) { toast("Scrivi il nome del nuovo progetto", "errore"); return importaFile(progetti); }
+      const contesto = (await api("/api/modelli-contesto/riunione")).testo;
+      slug = (await api("/api/progetti", { method: "POST", body: { nome: v.nome, contesto, lingua: v.lingua } })).slug;
+    }
+    toast("Caricamento del file…");
+    const r = await fetch(`/api/progetti/${enc(slug)}/importa?${new URLSearchParams({ nome_file: file.name, lingua: v.lingua })}`,
+      { method: "POST", body: file });
+    const dati = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(dati.detail || `Errore ${r.status}`);
+    toast("Trascrizione del file avviata", "ok");
+    aggiornaHeader();
+    location.hash = `#/p/${enc(slug)}/s/${dati.sessione}?tab=trascrizione`;
+  } catch (e) { toast(e.message, "errore"); }
 }
 
 async function nuovoProgetto(valori = {}) {

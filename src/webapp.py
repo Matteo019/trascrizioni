@@ -9,6 +9,7 @@ Uso:
 
 import os
 import sys
+import re
 import json
 import time
 import socket
@@ -29,7 +30,7 @@ if sys.stdout is None or sys.stderr is None:
     _log = open(ROOT / "dashboard.log", "a", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = _log
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -518,6 +519,49 @@ def api_avvia(slug: str, tipo: str, nuova: bool = False, sessione: str = ""):
     # la trascrizione continua l'ultima sessione; una nuova nasce solo dal bottone "Nuova sessione"
     p.avvia({})
     return p.stato()
+
+
+@app.post("/api/progetti/{slug}/importa")
+async def api_importa(slug: str, request: Request, nome_file: str, lingua: str = "it"):
+    """
+    Un file audio già registrato (m4a del telefono, mp3, wav, video...) diventa una sessione nuova:
+    si copia in audio/ e lo trascrive trascrittore.py come una chiamata; poi parte anche il riassunto.
+    """
+    verifica_slug(slug)
+    if lingua not in progetti.LINGUE:
+        raise HTTPException(400, "lingua non valida")
+    estensione = Path(nome_file).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,5}", estensione):
+        raise HTTPException(400, "Il file non ha un'estensione audio riconoscibile.")
+    p = processo(slug, "trascrizione")
+    if any(q.tipo == "trascrizione" and q.attivo for q in PROCESSI.values()):
+        raise HTTPException(409, "C'è già una trascrizione in corso: fermala prima di importare un file.")
+    try:
+        motori.client_trascrizione()
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc))
+    base = progetti.cartella(slug)
+    nome = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    (base / "audio").mkdir(parents=True, exist_ok=True)
+    destinazione = base / "audio" / f"{nome}_importato{estensione}"
+    with open(destinazione, "wb") as f:
+        async for pezzo in request.stream():
+            f.write(pezzo)
+    if destinazione.stat().st_size == 0:
+        destinazione.unlink()
+        raise HTTPException(400, "Il file è vuoto.")
+    (base / "trascrizioni").mkdir(parents=True, exist_ok=True)
+    (base / "trascrizioni" / f"trascrizione_{nome}.txt").touch()
+    p.avvia({"SORGENTE": "file", "FILE_AUDIO": str(destinazione.resolve()), "LINGUA": lingua,
+             "SALVA_AUDIO": "0", "NOME_SESSIONE": nome})
+    r = processo(slug, "riassunto")
+    if not r.attivo:
+        try:
+            motori.client_testo(5)
+            r.avvia({})
+        except RuntimeError:        # senza AI per i riassunti la trascrizione serve lo stesso
+            pass
+    return {**p.stato(), "sessione": nome}
 
 
 @app.post("/api/progetti/{slug}/processi/{tipo}/ferma")
