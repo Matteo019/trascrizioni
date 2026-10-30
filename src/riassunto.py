@@ -45,6 +45,7 @@ MAX_CARATTERI_PER_BLOCCO = 15000    # backlog lunghi vengono spezzati
 # il limite di output (16k token) e le parti chiuse non vengono più rigenerate.
 MAX_CARATTERI_PER_PARTE = 24000
 TIMEOUT_SECONDI = 300
+ATTESA_FINE_TRASCRIZIONE_SECONDI = 180   # in chiusura: quanto aspettare che la trascrizione fermata scriva l'ultimo pezzo
 # un solo modello, quello scelto nelle Impostazioni insieme alla chiave
 MODELLI = [motori.modello("riassunti")]
 MOTORE = motori.nome("riassunti")
@@ -361,10 +362,25 @@ def archivia_se_finita(trascrizione: Path, storico: Path):
         pass
 
 
+def sessione_che_continua() -> str:
+    """
+    La sessione che si sta ancora registrando e continuerà dopo la chiusura del riassunto ("" se nessuna).
+    Se la trascrizione sta solo finendo l'ultimo pezzo (fermata dalla dashboard) la si aspetta: quella va completata.
+    """
+    fine_attesa = time.time() + ATTESA_FINE_TRASCRIZIONE_SECONDI
+    while (sessione_in_scrittura(PROGETTO_DIR) and (PROGETTO_DIR / ".stop_trascrizione").exists()
+           and time.time() < fine_attesa):
+        time.sleep(2)
+    return sessione_in_scrittura(PROGETTO_DIR)
+
+
 def ciclo(client: OpenAI, forza: bool):
+    # in chiusura si forzano anche i pezzi corti, ma non quelli di una sessione appena iniziata:
+    # da poche righe uscirebbero appunti monchi e un titolo (generato una volta sola) sbagliato
+    continua = sessione_che_continua() if forza else ""
     for trascrizione in sorted(TRASCRIZIONI_DIR.glob("trascrizione_*.txt")):
         try:
-            elabora(client, trascrizione, forza)
+            elabora(client, trascrizione, forza and trascrizione.stem.removeprefix("trascrizione_") != continua)
         except Exception as exc:
             print(f"[ERRORE] {trascrizione.name}: {exc} (riprovo al prossimo giro, nulla è perso)")
 
