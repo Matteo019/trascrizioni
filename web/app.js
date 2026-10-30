@@ -1532,54 +1532,74 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
 
   box.innerHTML = `
     <div class="chat ${compatta ? "chat-compatta" : ""}">
-      <div class="chat-barra">
-        <select class="ambito-progetto" aria-label="Progetto">
-          <option value="">Tutti i progetti attivi</option>
-          ${progetti.map(p => `<option value="${esc(p.slug)}" ${p.slug === prog ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
-        </select>
-        <select class="ambito-sessione" aria-label="Sessione" ${progetto ? "" : "disabled"}>
-          <option value="">Tutte le sessioni</option>
-          ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
-        </select>
-        <select class="scelta-conversazione" aria-label="Conversazione"></select>
-        <span class="spazio"></span>
-        <button class="btn fantasma piccolo apri-istruzioni" type="button" title="Istruzioni che valgono per tutta la chat (es. «1 parola»)">Istruzioni</button>
-        <a class="btn fantasma piccolo esporta" href="/api/chat/esporta?${ambito}" download title="Scarica tutte le conversazioni in JSON">Esporta</a>
-        <button class="btn fantasma piccolo nuova" type="button" title="Nuova conversazione">Nuova</button>
-      </div>
-      <div class="chat-istruzioni" hidden>
-        <div class="chip-istruzioni"></div>
-        <form class="aggiungi-istruzione">
-          <input type="text" placeholder="Es. Rispondi con 1 parola" aria-label="Nuova istruzione per questa chat" autocomplete="off">
-          <button class="btn piccolo" type="submit">Aggiungi</button>
+      <aside class="chat-storico" aria-label="Le tue chat">
+        <button class="btn primario nuova" type="button">+ Nuova chat</button>
+        <div class="storico-titolo">Chat precedenti</div>
+        <nav class="storico-lista"></nav>
+        <a class="storico-esporta" href="/api/chat/esporta?${ambito}" download>Scarica tutte le chat (JSON)</a>
+      </aside>
+      <div class="chat-principale">
+        <div class="chat-barra">
+          <label class="ambito"><span>Cerca in</span>
+            <select class="ambito-progetto" aria-label="Progetto">
+              <option value="">Tutti i progetti attivi</option>
+              ${progetti.map(p => `<option value="${esc(p.slug)}" ${p.slug === prog ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="ambito" ${progetto ? "" : "hidden"}><span>Sessione</span>
+            <select class="ambito-sessione" aria-label="Sessione">
+              <option value="">Tutte le sessioni</option>
+              ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
+            </select>
+          </label>
+          <label class="ambito solo-compatta"><span>Chat</span><select class="scelta-conversazione" aria-label="Chat precedenti"></select></label>
+          <button class="btn fantasma piccolo nuova solo-compatta" type="button">+ Nuova</button>
+        </div>
+        <div class="chat-regole">
+          <span class="regole-titolo" title="Valgono per tutte le risposte di questa chat, finché non le togli">Regole di questa chat:</span>
+          <span class="chip-istruzioni"></span>
+          <form class="aggiungi-istruzione">
+            <input type="text" placeholder="+ aggiungi una regola (es. Rispondi con 1 parola)" aria-label="Nuova regola per questa chat" autocomplete="off">
+          </form>
+        </div>
+        <div class="messaggi" aria-live="polite"></div>
+        <form class="composer">
+          <textarea rows="1" placeholder="Scrivi una domanda…" aria-label="Domanda"></textarea>
+          <button class="btn primario invia" aria-label="Invia" title="Invia (Invio)">${ICONA_INVIA}</button>
         </form>
       </div>
-      <div class="messaggi" aria-live="polite"></div>
-      <form class="composer">
-        <textarea rows="1" placeholder="Scrivi una domanda…" aria-label="Domanda"></textarea>
-        <button class="btn primario invia" aria-label="Invia" title="Invia (Invio)">${ICONA_INVIA}</button>
-      </form>
     </div>`;
 
   const q = sel => box.querySelector(sel);
   const lista = q(".messaggi"), campo = q("textarea"), bottone = q(".invia");
-  const pannelloIstruzioni = q(".chat-istruzioni");
 
   async function disegnaConversazioni() {
     conversazioniElenco = await api(`/api/chat/conversazioni?${ambito}&sessione=${enc(sess)}`).catch(() => []);
-    q(".scelta-conversazione").innerHTML = `<option value="">Nuova conversazione</option>` + conversazioniElenco.map(c =>
-      `<option value="${esc(c.id)}" ${c.id === idConv ? "selected" : ""}>${c.chiusa ? "↪ " : ""}${esc(c.titolo || "Senza titolo")} · ${data(c.aggiornata)}</option>`).join("");
+    q(".storico-lista").innerHTML = conversazioniElenco.length ? conversazioniElenco.map(c =>
+      `<button type="button" class="storico-voce ${c.id === idConv ? "attiva" : ""}" data-id="${esc(c.id)}" title="${esc(c.titolo || "Senza titolo")}">
+        <span class="storico-nome">${esc(c.titolo || "Senza titolo")}</span>
+        <span class="storico-data">${data(c.aggiornata)} · ${c.messaggi} messaggi${c.chiusa ? " · continua nella successiva" : ""}</span>
+      </button>`).join("") : `<p class="secondario piccolo">Ancora nessuna chat.</p>`;
+    q(".storico-lista").querySelectorAll("[data-id]").forEach(b => b.onclick = () => passaA(b.dataset.id));
+    q(".scelta-conversazione").innerHTML = `<option value="">Nuova chat</option>` + conversazioniElenco.map(c =>
+      `<option value="${esc(c.id)}" ${c.id === idConv ? "selected" : ""}>${esc(c.titolo || "Senza titolo")} · ${data(c.aggiornata)}</option>`).join("");
   }
 
-  // istruzioni attive: chip sopra i messaggi; il tasto mostra quante sono
+  async function passaA(id) {
+    await apri(id);
+    disegnaConversazioni();
+    disegnaIstruzioni();
+    disegnaTutto();
+    campo.focus();
+  }
+
+  // regole attive: sempre visibili sopra i messaggi, ognuna si toglie con la ×
   function disegnaIstruzioni() {
-    q(".apri-istruzioni").textContent = istruzioni.length ? `Istruzioni (${istruzioni.length})` : "Istruzioni";
     q(".chip-istruzioni").innerHTML = istruzioni.length
-      ? istruzioni.map((t, i) => `<span class="chip">${esc(t)} <button type="button" class="togli" data-i="${i}" aria-label="Togli istruzione">×</button></span>`).join("")
-      : `<span class="secondario piccolo">Nessuna istruzione. Scrivine una qui, o dilla in chat (es. «1 parola»): vale per tutte le risposte dopo.</span>`;
+      ? istruzioni.map((t, i) => `<span class="regola">${esc(t)}<button type="button" class="togli" data-i="${i}" aria-label="Togli la regola ${esc(t)}" title="Togli">×</button></span>`).join("")
+      : `<span class="secondario">nessuna</span>`;
     q(".chip-istruzioni").querySelectorAll(".togli").forEach(b => b.onclick = () =>
       salvaIstruzioni(istruzioni.filter((_, i) => i !== +b.dataset.i)));
-    if (istruzioni.length) pannelloIstruzioni.hidden = false;
   }
 
   async function salvaIstruzioni(nuove) {
@@ -1712,9 +1732,8 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   campo.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); invia(); }
   });
-  q(".nuova").onclick = async () => { await apri(""); disegnaConversazioni(); disegnaIstruzioni(); disegnaTutto(); campo.focus(); };
-  q(".scelta-conversazione").onchange = async e => { await apri(e.target.value); disegnaIstruzioni(); disegnaTutto(); campo.focus(); };
-  q(".apri-istruzioni").onclick = () => { pannelloIstruzioni.hidden = !pannelloIstruzioni.hidden; if (!pannelloIstruzioni.hidden) q(".aggiungi-istruzione input").focus(); };
+  box.querySelectorAll(".nuova").forEach(b => b.onclick = () => passaA(""));
+  q(".scelta-conversazione").onchange = e => passaA(e.target.value);
   q(".aggiungi-istruzione").onsubmit = e => {
     e.preventDefault();
     const input = q(".aggiungi-istruzione input"), testo = input.value.trim();
