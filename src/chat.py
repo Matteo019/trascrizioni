@@ -157,24 +157,41 @@ def domanda_effettiva(storico: list) -> tuple:
     (ultima vera domanda dell'utente, risposte già scartate) per i seguiti come "riprova" o "1 parola":
     la ricerca nei documenti va fatta su quella domanda, non sulla parola "riprova".
     """
-    scartate = []
-    for i in range(len(storico) - 1, -1, -1):
-        m = storico[i]
+    for m in reversed(storico):
         if m.get("ruolo") != "utente":
             continue
         _, resto = aggiorna_istruzioni(str(m.get("testo", "")), [])
         if resto and not e_seguito(resto):
-            # le risposte date da lì in poi sono state rifiutate (altrimenti l'utente non chiederebbe di riprovare)
-            for dopo in storico[i + 1:]:
-                if dopo.get("ruolo") != "utente" and not dopo.get("errore"):
-                    breve = " ".join(str(dopo.get("testo", "")).split())[:120]
-                    if breve and breve not in scartate:
-                        scartate.append(breve)
-            return resto, scartate
-        for parole in SCARTATE_IN_TESTO.findall(resto):
-            if parole.strip() and parole.strip() not in scartate:
-                scartate.append(parole.strip())
-    return "", scartate
+            return resto, risposte_rifiutate(storico, resto)
+    return "", risposte_rifiutate(storico, "")
+
+
+def risposte_rifiutate(storico: list, domanda: str) -> list:
+    """
+    Le risposte che l'utente ha rifiutato ("riprova", "sbagliato", "non è X") per questa domanda,
+    anche quando l'ha riscritta da capo più volte. "1 parola" chiede solo un altro formato: non rifiuta niente.
+    """
+    def chiave(testo):
+        return " ".join(re.findall(r"\w+", testo.casefold()))
+
+    scartate, corrente, ultima = [], None, ""
+    for m in storico:
+        if m.get("errore"):
+            continue
+        if m.get("ruolo") != "utente":
+            ultima = " ".join(str(m.get("testo", "")).split())[:120]
+            continue
+        _, resto = aggiorna_istruzioni(str(m.get("testo", "")), [])
+        if resto and not e_seguito(resto):
+            # rifare la stessa domanda dopo una risposta vuol dire che quella risposta non andava
+            if chiave(resto) == corrente == chiave(domanda) and ultima and ultima not in scartate:
+                scartate.append(ultima)
+            corrente, ultima = chiave(resto), ""
+        elif resto and corrente == chiave(domanda):
+            for s in [ultima] + [p.strip() for p in SCARTATE_IN_TESTO.findall(resto)]:
+                if s and s not in scartate:
+                    scartate.append(s)
+    return scartate
 
 
 def contesto_progetto(slug: str = "") -> str:
@@ -462,9 +479,13 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
     istruzioni, resto = aggiorna_istruzioni(domanda, istruzioni)
     seguito = not resto or e_seguito(resto)
     riprova = bool(resto) and seguito
-    effettiva, scartate = domanda_effettiva(storico) if seguito else (resto, [])
+    # la domanda può essere riscritta da capo: le risposte già rifiutate per quella restano escluse
+    effettiva, scartate = domanda_effettiva(storico) if seguito else (resto, risposte_rifiutate(storico, resto))
     if riprova:
-        scartate += [s.strip() for s in SCARTATE_IN_TESTO.findall(resto) if s.strip() not in scartate]
+        # questo messaggio non è ancora nello storico: rifiuta l'ultima risposta data
+        ultima = next((" ".join(str(m.get("testo", "")).split())[:120] for m in reversed(storico)
+                       if m.get("ruolo") != "utente" and not m.get("errore")), "")
+        scartate += [s for s in [ultima] + [p.strip() for p in SCARTATE_IN_TESTO.findall(resto)] if s and s not in scartate]
     if not effettiva:
         # solo un'istruzione ("1 parola", "rispondi normalmente") senza una domanda a cui applicarla
         conferma = (f"Va bene. Istruzione attiva per questa chat: «{istruzioni[-1]}» Vale finché non mi dici di rispondere normalmente."
