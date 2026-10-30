@@ -1365,3 +1365,13 @@ body.home .header { display: none; }
 @media (max-width: 720px) {
   .riga-chiave, .riga-uso { grid-template-columns: 1fr; }
 }
+
+/* chat: istruzioni che valgono per tutta la conversazione, e separatore quando continua in una nuova */
+.chat-istruzioni { flex: 0 0 auto; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-5); border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); }
+.chat-istruzioni[hidden] { display: none; }
+.chip-istruzioni { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.chip-istruzioni .chip { cursor: default; }
+.chip-istruzioni .togli { border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 0 0 4px; color: inherit; }
+.aggiungi-istruzione { display: flex; gap: var(--sp-2); }
+.aggiungi-istruzione input { flex: 1; min-width: 0; }
+.chat-separatore { text-align: center; font-size: 12.5px; opacity: .7; margin: var(--sp-3) 0; }

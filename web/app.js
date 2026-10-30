@@ -1512,10 +1512,23 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   // il modello non si sceglie qui: è quello impostato per la Chat nelle Impostazioni
   const progetti = await api("/api/progetti");
   const progetto = prog ? await api(`/api/progetti/${enc(prog)}`).catch(() => null) : null;
-  const chiave = `chat:${prog}:${sess}`;
-  let storico = [];
-  try { storico = JSON.parse(sessionStorage.getItem(chiave) || "[]"); } catch (e) {}
-  const memorizza = () => { try { sessionStorage.setItem(chiave, JSON.stringify(storico)); } catch (e) {} };
+  // le conversazioni stanno sul server (un JSON ciascuna); il browser ricorda solo quale era aperta in questo ambito
+  const chiave = `chat-id:${prog}:${sess}`;
+  const ambito = `progetto=${enc(prog)}`;
+  let idConv = "", storico = [], istruzioni = [], conversazioniElenco = [];
+  try { idConv = sessionStorage.getItem(chiave) || ""; } catch (e) {}
+  const memorizza = () => { try { sessionStorage.setItem(chiave, idConv); } catch (e) {} };
+  async function apri(id) {
+    idConv = id || "";
+    storico = [];
+    istruzioni = [];
+    if (idConv) {
+      const c = await api(`/api/chat/conversazioni/${enc(idConv)}?${ambito}`).catch(() => null);
+      if (c) { storico = c.messaggi; istruzioni = c.istruzioni; } else idConv = "";
+    }
+    memorizza();
+  }
+  await apri(idConv);
 
   box.innerHTML = `
     <div class="chat ${compatta ? "chat-compatta" : ""}">
@@ -1528,8 +1541,18 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
           <option value="">Tutte le sessioni</option>
           ${(progetto?.elenco_sessioni || []).map(s => `<option value="${s.nome}" ${s.nome === sess ? "selected" : ""}>${data(s.inizio)} — ${esc(s.titolo || "Senza titolo")}</option>`).join("")}
         </select>
+        <select class="scelta-conversazione" aria-label="Conversazione"></select>
         <span class="spazio"></span>
+        <button class="btn fantasma piccolo apri-istruzioni" type="button" title="Istruzioni che valgono per tutta la chat (es. «1 parola»)">Istruzioni</button>
+        <a class="btn fantasma piccolo esporta" href="/api/chat/esporta?${ambito}" download title="Scarica tutte le conversazioni in JSON">Esporta</a>
         <button class="btn fantasma piccolo nuova" type="button" title="Nuova conversazione">Nuova</button>
+      </div>
+      <div class="chat-istruzioni" hidden>
+        <div class="chip-istruzioni"></div>
+        <form class="aggiungi-istruzione">
+          <input type="text" placeholder="Es. Rispondi con 1 parola" aria-label="Nuova istruzione per questa chat" autocomplete="off">
+          <button class="btn piccolo" type="submit">Aggiungi</button>
+        </form>
       </div>
       <div class="messaggi" aria-live="polite"></div>
       <form class="composer">
@@ -1540,6 +1563,37 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
 
   const q = sel => box.querySelector(sel);
   const lista = q(".messaggi"), campo = q("textarea"), bottone = q(".invia");
+  const pannelloIstruzioni = q(".chat-istruzioni");
+
+  async function disegnaConversazioni() {
+    conversazioniElenco = await api(`/api/chat/conversazioni?${ambito}&sessione=${enc(sess)}`).catch(() => []);
+    q(".scelta-conversazione").innerHTML = `<option value="">Nuova conversazione</option>` + conversazioniElenco.map(c =>
+      `<option value="${esc(c.id)}" ${c.id === idConv ? "selected" : ""}>${c.chiusa ? "↪ " : ""}${esc(c.titolo || "Senza titolo")} · ${data(c.aggiornata)}</option>`).join("");
+  }
+
+  // istruzioni attive: chip sopra i messaggi; il tasto mostra quante sono
+  function disegnaIstruzioni() {
+    q(".apri-istruzioni").textContent = istruzioni.length ? `Istruzioni (${istruzioni.length})` : "Istruzioni";
+    q(".chip-istruzioni").innerHTML = istruzioni.length
+      ? istruzioni.map((t, i) => `<span class="chip">${esc(t)} <button type="button" class="togli" data-i="${i}" aria-label="Togli istruzione">×</button></span>`).join("")
+      : `<span class="secondario piccolo">Nessuna istruzione. Scrivine una qui, o dilla in chat (es. «1 parola»): vale per tutte le risposte dopo.</span>`;
+    q(".chip-istruzioni").querySelectorAll(".togli").forEach(b => b.onclick = () =>
+      salvaIstruzioni(istruzioni.filter((_, i) => i !== +b.dataset.i)));
+    if (istruzioni.length) pannelloIstruzioni.hidden = false;
+  }
+
+  async function salvaIstruzioni(nuove) {
+    if (!idConv) {
+      const c = await api("/api/chat/conversazioni", { method: "POST", body: { progetto: prog, sessione: sess, istruzioni: nuove } });
+      idConv = c.id;
+      memorizza();
+      istruzioni = c.istruzioni;
+      await disegnaConversazioni();
+    } else {
+      istruzioni = (await api(`/api/chat/conversazioni/${enc(idConv)}?${ambito}`, { method: "PATCH", body: { istruzioni: nuove } })).istruzioni;
+    }
+    disegnaIstruzioni();
+  }
 
   const fontiHtml = fonti => !fonti?.length ? "" : `<div class="fonti">${fonti.map((f, i) =>
     `<a class="fonte" href="#/p/${enc(f.progetto)}/s/${f.sessione}?tab=${f.tipo}"><b>${i + 1}</b>${esc(f.titolo || data(sessioneIso(f.sessione)))} · ${NOMI_FILE[f.tipo]}</a>`).join("")}</div>`;
@@ -1594,7 +1648,6 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     if (!domanda || occupato) return;
     occupato = true;
     bottone.disabled = true;
-    const precedente = storico.filter(m => !m.errore).map(m => ({ ruolo: m.ruolo, testo: m.testo }));
     const msgUtente = { ruolo: "utente", testo: domanda, ora: new Date().toISOString() };
     storico.push(msgUtente);
     campo.value = "";
@@ -1617,18 +1670,34 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
     lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
     let risposta;
     try {
-      const r = await api("/api/chat", { method: "POST", body: { domanda, storico: precedente, progetto: prog, sessione: sess } });
+      const r = await api("/api/chat", { method: "POST", body: { domanda, id_conversazione: idConv, progetto: prog, sessione: sess } });
       risposta = { ruolo: "assistente", testo: r.risposta, html: r.html, fonti: r.fonti, web: r.web, segnate: r.segnate, modello: r.nome_modello, secondi: r.secondi, ora: new Date().toISOString() };
+      const prima = idConv;
+      idConv = r.id_conversazione;
+      istruzioni = r.istruzioni || [];
+      memorizza();
+      if (r.nuova_conversazione) {
+        // conversazione lunga: la prossima domanda va nella nuova, che ha le stesse istruzioni e un riassunto di questa
+        idConv = r.nuova_conversazione;
+        memorizza();
+        risposta.rollover = true;
+      }
+      if (prima !== idConv || r.nuova_conversazione) disegnaConversazioni();
     } catch (e) {
       risposta = { ruolo: "assistente", testo: e.message, errore: true, ora: new Date().toISOString() };
     }
     clearInterval(contatore);
     storico.push(risposta);
-    memorizza();
     occupato = false;
     if (!document.body.contains(lista)) return;      // nel frattempo la chat è stata chiusa
     digitando.remove();
     aggiungi(risposta, true);
+    disegnaIstruzioni();
+    if (risposta.rollover) {
+      storico = [];
+      lista.insertAdjacentHTML("beforeend", `<div class="chat-separatore">Conversazione lunga: continuo in una nuova chat, con le stesse istruzioni e un riassunto di questa.</div>`);
+      lista.scrollTo({ top: lista.scrollHeight, behavior: "smooth" });
+    }
     bottone.disabled = false;
     campo.focus();
   }
@@ -1643,7 +1712,18 @@ async function creaChat(box, { prog = "", sess = "", compatta = false, cambiaAmb
   campo.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); invia(); }
   });
-  q(".nuova").onclick = () => { storico = []; memorizza(); disegnaTutto(); campo.focus(); };
+  q(".nuova").onclick = async () => { await apri(""); disegnaConversazioni(); disegnaIstruzioni(); disegnaTutto(); campo.focus(); };
+  q(".scelta-conversazione").onchange = async e => { await apri(e.target.value); disegnaIstruzioni(); disegnaTutto(); campo.focus(); };
+  q(".apri-istruzioni").onclick = () => { pannelloIstruzioni.hidden = !pannelloIstruzioni.hidden; if (!pannelloIstruzioni.hidden) q(".aggiungi-istruzione input").focus(); };
+  q(".aggiungi-istruzione").onsubmit = e => {
+    e.preventDefault();
+    const input = q(".aggiungi-istruzione input"), testo = input.value.trim();
+    if (!testo) return;
+    input.value = "";
+    salvaIstruzioni([...istruzioni, testo]);
+  };
+  disegnaConversazioni();
+  disegnaIstruzioni();
   q(".ambito-progetto").onchange = e => cambiaAmbito(e.target.value, "");
   q(".ambito-sessione").onchange = e => cambiaAmbito(prog, e.target.value);
   disegnaTutto();

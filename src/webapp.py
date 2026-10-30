@@ -38,6 +38,7 @@ import motori
 import progetti
 import sessioni
 import chat
+import conversazioni
 from export_pdf import markdown_in_pdf
 
 SCRIPT = {"trascrizione": ROOT / "src" / "trascrittore.py", "riassunto": ROOT / "src" / "riassunto.py"}
@@ -446,12 +447,98 @@ def api_chat(dati: dict = Body(...)):
         verifica_slug(progetto)
     if sessione:
         verifica_sessione(progetto, sessione)
-    storico = [m for m in dati.get("storico", []) if isinstance(m, dict)]
+    id_ = str(dati.get("id_conversazione") or "")
+    conv = leggi_conversazione(progetto, id_) if id_ else conversazioni.nuova(progetto, sessione)
+    if conv["chiusa"] and conv.get("continua_in"):
+        conv = leggi_conversazione(progetto, conv["continua_in"])
+    domandata = {"ruolo": "utente", "testo": domanda, "ora": conversazioni.adesso()}
+    istruzioni_prima = conv["istruzioni"]
+    # "1 parola" vale anche se il modello questa volta non risponde
+    conv["istruzioni"] = chat.aggiorna_istruzioni(domanda, istruzioni_prima)[0]
     try:
-        r = chat.rispondi(domanda, storico, progetto, sessione)
+        r = chat.rispondi(domanda, [m for m in conv["messaggi"] if not m.get("errore")], progetto, sessione,
+                          istruzioni_prima, conv.get("riassunto_precedente", ""))
     except RuntimeError as exc:
+        conversazioni.aggiungi_messaggi(conv, domandata, {"ruolo": "assistente", "testo": str(exc), "errore": True,
+                                                          "ora": conversazioni.adesso()})
         raise HTTPException(502, str(exc))
-    return {**r, "html": sessioni.md_in_html(r["risposta"])}
+    conv["istruzioni"] = r.pop("istruzioni", conv["istruzioni"])
+    html = sessioni.md_in_html(r["risposta"])
+    conversazioni.aggiungi_messaggi(conv, domandata, {
+        "ruolo": "assistente", "testo": r["risposta"], "html": html, "fonti": r.get("fonti", []), "web": r.get("web", []),
+        "segnate": r.get("segnate"), "modello": r.get("nome_modello"), "secondi": r.get("secondi"), "ora": conversazioni.adesso()})
+    nuova = None
+    if conversazioni.da_chiudere(conv):
+        nuova = conversazioni.rollover(conv, chat.riassumi_conversazione(conv["messaggi"]))["id"]
+    return {**r, "html": html, "id_conversazione": conv["id"], "titolo": conv["titolo"],
+            "istruzioni": conv["istruzioni"], "nuova_conversazione": nuova}
+
+
+def leggi_conversazione(progetto: str, id_: str) -> dict:
+    try:
+        return conversazioni.leggi(progetto, id_)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except FileNotFoundError:
+        raise HTTPException(404, "conversazione non trovata")
+
+
+@app.get("/api/chat/conversazioni")
+def api_conversazioni(progetto: str = "", sessione: str = ""):
+    if progetto:
+        verifica_slug(progetto)
+    return conversazioni.elenco(progetto, sessione)
+
+
+@app.post("/api/chat/conversazioni")
+def api_nuova_conversazione(dati: dict = Body(...)):
+    progetto, sessione = str(dati.get("progetto") or ""), str(dati.get("sessione") or "")
+    if progetto:
+        verifica_slug(progetto)
+    if sessione:
+        verifica_sessione(progetto, sessione)
+    istruzioni = [str(i).strip() for i in dati.get("istruzioni", []) if str(i).strip()]
+    return conversazioni.nuova(progetto, sessione, istruzioni)
+
+
+@app.get("/api/chat/conversazioni/{id_}")
+def api_conversazione(id_: str, progetto: str = ""):
+    if progetto:
+        verifica_slug(progetto)
+    return leggi_conversazione(progetto, id_)
+
+
+@app.patch("/api/chat/conversazioni/{id_}")
+def api_modifica_conversazione(id_: str, dati: dict = Body(...), progetto: str = ""):
+    if progetto:
+        verifica_slug(progetto)
+    conv = leggi_conversazione(progetto, id_)
+    if "titolo" in dati:
+        conv["titolo"] = str(dati["titolo"]).strip()[:120]
+    if "istruzioni" in dati:
+        conv["istruzioni"] = [str(i).strip()[:300] for i in dati["istruzioni"] if str(i).strip()][:10]
+    conversazioni.salva(conv)
+    return conv
+
+
+@app.delete("/api/chat/conversazioni/{id_}")
+def api_elimina_conversazione(id_: str, progetto: str = ""):
+    if progetto:
+        verifica_slug(progetto)
+    leggi_conversazione(progetto, id_)
+    conversazioni.nel_cestino(progetto, id_)
+    return {"ok": True}
+
+
+@app.get("/api/chat/esporta")
+def api_esporta_chat(progetto: str = ""):
+    """Tutte le conversazioni (del progetto, o di tutto) in un unico JSON da scaricare."""
+    if progetto:
+        verifica_slug(progetto)
+    nome = f"chat {progetto or 'tutte'} {datetime.datetime.now():%Y-%m-%d}.json"
+    return Response(json.dumps(conversazioni.esporta(progetto), ensure_ascii=False, indent=2).encode("utf-8"),
+                    media_type="application/json; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
 
 # ---------------------------------------------------------------------------

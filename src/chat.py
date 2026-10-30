@@ -56,7 +56,10 @@ REGOLE (obbligatorie):
      dì chiaramente che nei documenti delle sessioni non se ne parla, poi spiega in breve come funziona secondo la prassi della materia.
    - Non spacciare mai per affermazioni del docente ciò che nei documenti non c'è, e non segnare queste spiegazioni come aggiunte.
    - I passaggi segnati [INCERTO] vanno riportati come incerti. Le righe [aggiunta] le aveva già segnate la chat.
-
+6. ISTRUZIONI DELL'UTENTE (se ce ne sono qui sotto): valgono per ogni risposta finché non le cambia.
+   Se chiedono N parole, la risposta è esattamente di N parole (una per spazio vuoto se lo dice): niente fonti, niente spiegazioni.
+   Se la domanda elenca delle opzioni, scegli una di quelle.
+{extra}
 Dopo la risposta, se in questo scambio sono emerse informazioni NUOVE che i documenti non contengono
 (qualcosa che l'utente ti ha detto o corretto, o un approfondimento dalle pagine web che hai usato nella risposta),
 scrivi una riga con solo {separatore} e sotto una voce per informazione: "- " seguito da una frase breve che si
@@ -91,6 +94,87 @@ SALUTI = re.compile(
 def e_saluto(testo: str) -> bool:
     """True se il messaggio è solo un saluto, un ringraziamento o un convenevole."""
     return bool(SALUTI.match(testo))
+
+
+# --- istruzioni della conversazione ("1 parola"...) e messaggi di seguito ("riprova", "non è X") ---
+NUMERI_PAROLE = {"un": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5}
+VINCOLO_PAROLE = re.compile(
+    r"(?:\b(?:rispondi(?:mi)?\s+)?(?:in|con)\s+)?\b(\d{1,2}|una|un|due|tre|quattro|cinque)\s+parol[ae]"
+    r"(\s+per\s+(?:ogni\s+)?(?:campo|spazio|spazi|buco|risposta))?\b[\s:.,;-]*", re.IGNORECASE)
+VINCOLI_FISSI = {
+    re.compile(r"\b(?:senza|niente|no)\s+spiegazion[ei]\b[\s:.,;-]*", re.I): "Niente spiegazioni: solo la risposta.",
+    re.compile(r"\bsolo\s+(?:il\s+)?numero\b[\s:.,;-]*", re.I): "Rispondi solo con il numero.",
+}
+TOGLI_ISTRUZIONI = re.compile(
+    r"\b(?:(?:ora\s+)?rispondi\s+normalmente|togli\s+(?:le\s+)?istruzion\w*|niente\s+(?:più\s+)?vincol\w*|"
+    r"basta\s+(?:con\s+)?(?:le\s+)?(?:\d+\s+)?parol\w*|risposte\s+(?:complete|normali))\b[\s:.,;-]*", re.IGNORECASE)
+SEGUITO = re.compile(
+    r"^\s*(?:riprova\w*|ancora|di nuovo|un'altra|altra risposta|non\s+è\b.*|no\b.*|sbagliat\w*.*|errat\w*.*)\s*[.!?]*\s*$",
+    re.IGNORECASE)
+SCARTATE_IN_TESTO = re.compile(r"\b(?:non\s+è|no)\s+([^,;.!?]+?)(?=\s*(?:[,;.!?]|riprova|$))", re.IGNORECASE)
+QUIZ = re.compile(r"completa la frase|spazi[o]? vuot|riempiendo|_{3,}", re.IGNORECASE)
+MAX_TOKEN_VINCOLO = 500       # i modelli che ragionano spendono token anche prima della risposta: non scendere troppo
+
+
+def istruzione_parole(m) -> str:
+    numero = m.group(1).lower()
+    n = int(numero) if numero.isdigit() else NUMERI_PAROLE[numero]
+    per_spazio = " per ogni spazio vuoto" if m.group(2) else ""
+    return f"Rispondi con {n} parol{'a' if n == 1 else 'e'}{per_spazio}."
+
+
+def aggiorna_istruzioni(testo: str, istruzioni: list) -> tuple:
+    """
+    (istruzioni aggiornate, testo senza i vincoli) a partire dal messaggio dell'utente.
+    Un vincolo nuovo dello stesso tipo sostituisce il precedente; "rispondi normalmente" le toglie tutte.
+    """
+    istruzioni = list(istruzioni)
+    if TOGLI_ISTRUZIONI.search(testo):
+        istruzioni = []
+        testo = TOGLI_ISTRUZIONI.sub(" ", testo)
+    m = VINCOLO_PAROLE.search(testo)
+    if m:
+        istruzioni = [i for i in istruzioni if not i.startswith("Rispondi con ") or "numero" in i] + [istruzione_parole(m)]
+        testo = VINCOLO_PAROLE.sub(" ", testo, count=1)
+    for regola, istruzione in VINCOLI_FISSI.items():
+        if regola.search(testo):
+            if istruzione not in istruzioni:
+                istruzioni.append(istruzione)
+            testo = regola.sub(" ", testo)
+    return istruzioni, testo.strip(" \t\n:-—,.;")
+
+
+def vincola_parole(istruzioni) -> bool:
+    return any(re.match(r"Rispondi (?:con \d+ parol|solo con il numero)|Niente spiegazioni", i) for i in istruzioni)
+
+
+def e_seguito(testo: str) -> bool:
+    return bool(SEGUITO.match(testo)) and len(testo) < 120
+
+
+def domanda_effettiva(storico: list) -> tuple:
+    """
+    (ultima vera domanda dell'utente, risposte già scartate) per i seguiti come "riprova" o "1 parola":
+    la ricerca nei documenti va fatta su quella domanda, non sulla parola "riprova".
+    """
+    scartate = []
+    for i in range(len(storico) - 1, -1, -1):
+        m = storico[i]
+        if m.get("ruolo") != "utente":
+            continue
+        _, resto = aggiorna_istruzioni(str(m.get("testo", "")), [])
+        if resto and not e_seguito(resto):
+            # le risposte date da lì in poi sono state rifiutate (altrimenti l'utente non chiederebbe di riprovare)
+            for dopo in storico[i + 1:]:
+                if dopo.get("ruolo") != "utente" and not dopo.get("errore"):
+                    breve = " ".join(str(dopo.get("testo", "")).split())[:120]
+                    if breve and breve not in scartate:
+                        scartate.append(breve)
+            return resto, scartate
+        for parole in SCARTATE_IN_TESTO.findall(resto):
+            if parole.strip() and parole.strip() not in scartate:
+                scartate.append(parole.strip())
+    return "", scartate
 
 
 def contesto_progetto(slug: str = "") -> str:
@@ -368,20 +452,42 @@ def scegli_pezzi(domanda: str, slug: str, sessione: str) -> list:
     return scelti
 
 
-def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") -> dict:
+def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "",
+             istruzioni=(), riassunto_precedente: str = "") -> dict:
+    """
+    La risposta alla domanda, con le istruzioni della conversazione aggiornate (chiave "istruzioni").
+    "1 parola" detto una volta vale per le domande dopo; "riprova" rifà l'ultima vera domanda escludendo le risposte già date.
+    """
     modello = motori.modello("chat")
-    saluto = e_saluto(domanda)
+    istruzioni, resto = aggiorna_istruzioni(domanda, istruzioni)
+    seguito = not resto or e_seguito(resto)
+    riprova = bool(resto) and seguito
+    effettiva, scartate = domanda_effettiva(storico) if seguito else (resto, [])
+    if riprova:
+        scartate += [s.strip() for s in SCARTATE_IN_TESTO.findall(resto) if s.strip() not in scartate]
+    if not effettiva:
+        # solo un'istruzione ("1 parola", "rispondi normalmente") senza una domanda a cui applicarla
+        conferma = (f"Va bene. Istruzione attiva per questa chat: «{istruzioni[-1]}» Vale finché non mi dici di rispondere normalmente."
+                    if istruzioni else "Va bene: da ora rispondo normalmente.")
+        if resto:
+            conferma = "Non trovo una domanda precedente da rifare: scrivimela di nuovo."
+        return {"risposta": conferma, "fonti": [], "istruzioni": istruzioni}
+
+    saluto = e_saluto(effettiva)
     pezzi, web = [], []
     if not saluto:
-        # prima i documenti; le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?")
-        testo_ricerca = " ".join([m["testo"] for m in storico[-4:] if m.get("ruolo") == "utente"] + [domanda])
-        pezzi = scegli_pezzi(testo_ricerca, slug, sessione)
+        # prima i documenti; le domande precedenti aiutano a capire di cosa si sta parlando ("e il secondo?"),
+        # ma non per i quiz, dove ogni domanda fa storia a sé, e senza i seguiti ("riprova") che non dicono niente
+        precedenti = [] if QUIZ.search(effettiva) or seguito else [
+            r for r in (aggiorna_istruzioni(str(m.get("testo", "")), [])[1] for m in storico[-4:] if m.get("ruolo") == "utente")
+            if r and not e_seguito(r)]
+        pezzi = scegli_pezzi(" ".join(precedenti + [effettiva]), slug, sessione)
         # internet solo se i documenti non hanno niente, o se l'utente lo chiede
-        if not pezzi or CHIEDE_WEB.search(domanda):
-            web = cerca_web(domanda)
+        if not pezzi or CHIEDE_WEB.search(effettiva):
+            web = cerca_web(effettiva)
     if not pezzi and not web and not slug and not saluto:
         return {"risposta": "Non ho trovato nei documenti né su internet niente che riguardi questa domanda. "
-                            "Prova con altre parole, o scegli un progetto.", "fonti": []}
+                            "Prova con altre parole, o scegli un progetto.", "fonti": [], "istruzioni": istruzioni}
 
     # una fonte numerata per documento (riassunto e appunti della stessa sessione sono due fonti: il link apre quello giusto)
     elenco_fonti, numeri = [], {}
@@ -395,21 +501,38 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
         f"{' — ' + p['titolo'] if p['titolo'] else ''} — {p['tipo']} — {p['sezione']}\n{p['pezzo']}" for p in pezzi)
 
     pagine = "\n\n".join(f"{p['titolo']} ({p['link']})\n{p['testo']}" for p in web)
+    extra = ""
+    if istruzioni:
+        extra += "\nISTRUZIONI DELL'UTENTE PER QUESTA CHAT:\n" + "\n".join(f"- {i}" for i in istruzioni) + "\n"
+    if QUIZ.search(effettiva):
+        extra += "\nDOMANDA DA QUIZ: rispondi solo con le parole mancanti, nell'ordine, separate da \" · \".\n"
+    if scartate:
+        extra += "\nRISPOSTE GIÀ DATE E SBAGLIATE (non ripeterle, cercane un'altra):\n" + "\n".join(f"- {s}" for s in scartate) + "\n"
+    if riassunto_precedente:
+        extra += f"\nCONVERSAZIONE PRECEDENTE (riassunto):\n{riassunto_precedente[:600]}\n"
     messaggi = [{"role": "system", "content": SISTEMA.format(
         contesto=contesto_progetto(slug), documenti=documenti or "(nessun documento pertinente)",
-        web=pagine or "(nessuna pagina consultata)", separatore=SEPARATORE_APPUNTI)}]
+        web=pagine or "(nessuna pagina consultata)", separatore=SEPARATORE_APPUNTI, extra=extra)}]
     # solo gli ultimi scambi, accorciati: servono a capire "e il secondo?", non a rimandare tutto
     for m in storico[-4:]:
         messaggi.append({"role": "user" if m.get("ruolo") == "utente" else "assistant",
                          "content": str(m.get("testo", ""))[:1500]})
-    messaggi.append({"role": "user", "content": domanda})
+    if riprova:
+        messaggi.append({"role": "user", "content": f"{effettiva}\n\n(L'utente dice «{resto}»: la risposta precedente era sbagliata, "
+                                                    "riprova con una risposta diversa.)"})
+    elif seguito:
+        messaggi.append({"role": "user", "content": f"{effettiva}\n\n(Rispondi di nuovo rispettando le istruzioni.)"})
+    else:
+        messaggi.append({"role": "user", "content": domanda})
 
     # pochi token riservati per la risposta: con 3000 una sola chiamata esauriva i token al minuto di Groq
     token_max = MAX_TOKEN_SALUTO if saluto else min(MAX_TOKEN_RISPOSTA, motori.max_token("chat", MAX_TOKEN_RISPOSTA))
+    if vincola_parole(istruzioni):
+        token_max = min(token_max, MAX_TOKEN_VINCOLO)
     inizio = time.time()
     try:
         r = motori.client("chat", TIMEOUT_SECONDI).chat.completions.create(
-            model=modello, messages=messaggi, temperature=0.2, max_tokens=token_max)
+            model=modello, messages=messaggi, temperature=0.7 if riprova else 0.2, max_tokens=token_max)
         testo = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
     except RuntimeError:
         raise
@@ -423,6 +546,8 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
 
     web = pagine_web_utili(testo, web)      # sotto la risposta solo le pagine che ha usato (anche solo negli appunti)
     testo, voci = separa_aggiunte(testo)
+    if riprova:
+        voci = []      # "riprova" dice solo che la risposta era sbagliata, non quale sia quella giusta: niente da segnare
     segnate = None
     if voci:
         dove, nome = sessione_per_aggiunte(slug, sessione, pezzi)
@@ -430,4 +555,23 @@ def rispondi(domanda: str, storico: list, slug: str = "", sessione: str = "") ->
         if nome:
             segnate.update(progetto=dove, sessione=nome, nuove=sessioni.aggiungi(dove, nome, voci))
     return {"risposta": testo, "fonti": elenco_fonti, "nome_modello": modello,
-            "secondi": round(time.time() - inizio), "web": web, "segnate": segnate}
+            "secondi": round(time.time() - inizio), "web": web, "segnate": segnate, "istruzioni": istruzioni}
+
+
+def riassumi_conversazione(messaggi: list) -> str:
+    """Poche righe sulla conversazione che si chiude, per quella che la continua; senza modello, le ultime domande."""
+    domande = [" ".join(str(m.get("testo", "")).split())[:150] for m in messaggi if m.get("ruolo") == "utente"]
+    ripiego = "Domande recenti: " + " | ".join(domande[-5:])
+    testo = "\n".join(f"{'Utente' if m.get('ruolo') == 'utente' else 'Chat'}: {' '.join(str(m.get('testo', '')).split())[:300]}"
+                      for m in messaggi if not m.get("errore"))[-8000:]
+    try:
+        r = motori.client("chat", TIMEOUT_SECONDI).chat.completions.create(
+            model=motori.modello("chat"), temperature=0.2, max_tokens=400, messages=[
+                {"role": "system", "content": "Riassumi in italiano, in massimo 600 caratteri, questa conversazione: "
+                                              "argomenti, risposte confermate o corrette dall'utente. Solo il riassunto."},
+                {"role": "user", "content": testo}])
+        riassunto = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+    except Exception as exc:
+        print(f"[CHAT] Riassunto della conversazione non riuscito ({type(exc).__name__}): uso le ultime domande", flush=True)
+        riassunto = ""
+    return (riassunto or ripiego)[:600]
