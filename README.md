@@ -8,6 +8,19 @@ Progetto personale, fornito così com'è (licenza MIT), senza garanzie né suppo
 - Trascrizione: Groq Whisper (`whisper-large-v3`, con passaggio automatico a `turbo`), gratuito, oppure OpenAI, un server Whisper locale o **Whisper su questo PC** (integrato, senza server: l'audio non esce dal computer, utile con policy aziendali che vietano il cloud). Velocità sul proprio PC: `python strumenti/benchmark_whisper.py audio.wav`
 - Riassunti e chat: modelli NVIDIA gratuiti, oppure OpenAI, Gemini, Claude, DeepSeek, Mistral, OpenRouter, un'AI locale o qualsiasi endpoint compatibile OpenAI
 
+## Linux (Fedora)
+
+Questo ramo funziona anche su Fedora (PipeWire). L'audio si cattura con `parec`: il microfono è un ingresso,
+l'«Audio del PC» è il *monitor* dell'uscita scelta (nessun cavo virtuale). VB-CABLE non serve.
+
+```bash
+sudo dnf install python3 python3-pip pulseaudio-utils liberation-sans-fonts
+./avvia_dashboard.sh
+```
+
+Il primo avvio crea `.venv` e installa le dipendenze; poi apre http://127.0.0.1:8765. Con `./avvia_dashboard.sh --terminale`
+resta in primo piano. Da terminale senza dashboard: `terminale/avvia_trascrizione.sh` e `terminale/avvia_riassunto.sh`.
+
 ## Le due modalità
 
 | | Microfono | Audio del PC |

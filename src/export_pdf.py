@@ -11,14 +11,33 @@ from xhtml2pdf import pisa
 from sessioni import md_in_html
 
 # Helvetica (predefinito di xhtml2pdf) non ha frecce e simboli usati nei riassunti (→):
-# si usa Arial di Windows se c'è.
-FONT_DIR = Path("C:/Windows/Fonts")
-FONT = {"normal": "arial.ttf", "bold": "arialbd.ttf", "italic": "ariali.ttf"}
+# si usa un font di sistema se c'è: Arial su Windows; su Linux (Fedora) Liberation Sans o DejaVu Sans.
+FAMIGLIE = [("arial.ttf", "arialbd.ttf", "ariali.ttf"),
+            ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf", "LiberationSans-Italic.ttf"),
+            ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf")]
+RADICI = [Path("C:/Windows/Fonts"), Path("/usr/share/fonts"), Path("/usr/local/share/fonts"),
+          Path.home() / ".local/share/fonts", Path.home() / ".fonts"]
+
+
+def _trova_font():
+    """(cartella, {normal, bold, italic}) di una famiglia completa nella stessa cartella, altrimenti (None, {})."""
+    for nomi in FAMIGLIE:
+        for radice in RADICI:
+            if not radice.is_dir():
+                continue
+            for trovato in radice.rglob(nomi[0]):
+                if all((trovato.parent / n).exists() for n in nomi):
+                    return trovato.parent, dict(zip(("normal", "bold", "italic"), nomi))
+    return None, {}
+
+
+FONT_DIR, FONT = _trova_font()
 
 # xhtml2pdf recente legge solo i file accanto al documento: gli si apre la sola cartella dei font, niente rete
 try:
     from xhtml2pdf.config.resources import ResourceAccessPolicy
-    POLITICA = {"resource_policy": ResourceAccessPolicy(allow_remote=False, base_dir=FONT_DIR)}
+    POLITICA = ({"resource_policy": ResourceAccessPolicy(allow_remote=False, base_dir=FONT_DIR)}
+                if FONT_DIR else {})
 except ImportError:
     POLITICA = {}
 
@@ -44,7 +63,7 @@ code { font-family: Courier; font-size: 9.5pt; }
 
 
 def _css() -> str:
-    if all((FONT_DIR / f).exists() for f in FONT.values()):
+    if FONT_DIR:
         facce = "".join(
             f"@font-face {{ font-family: Testo; src: url('{(FONT_DIR / f).as_posix()}'); "
             f"{'font-weight: bold;' if stile == 'bold' else ''}{'font-style: italic;' if stile == 'italic' else ''} }}\n"

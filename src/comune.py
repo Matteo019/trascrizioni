@@ -84,6 +84,11 @@ def path_progetto(slug: str) -> Path:
 
 def ora_creazione(pid: int) -> int:
     """Istante di creazione del processo (Windows, FILETIME), 0 se non leggibile: distingue un PID riusato."""
+    if sys.platform.startswith("linux"):
+        try:       # campo 22 di /proc/<pid>/stat: avvio in tick dall'accensione (dopo il nome tra parentesi)
+            return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+        except (OSError, ValueError, IndexError):
+            return 0
     if os.name != "nt":
         return 0
     import ctypes
@@ -121,9 +126,12 @@ def pid_vivo(pid: int) -> bool:
     if os.name != "nt":
         try:
             os.kill(pid, 0)
-            return True
         except OSError:
             return False
+        try:       # su Linux uno zombie (terminato, non ancora raccolto) risponde a kill 0: non è vivo
+            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError):
+            return True
     import ctypes
     kernel32 = ctypes.windll.kernel32
     handle = kernel32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
@@ -189,7 +197,10 @@ def nome_dispositivo(info: dict) -> str:
 
 
 def dispositivi(sorgente: str) -> dict:
-    """Nomi dei dispositivi per la combobox della dashboard e quello predefinito di Windows."""
+    """Nomi dei dispositivi per la combobox della dashboard e quello predefinito del sistema."""
+    if sys.platform.startswith("linux"):
+        import audio_linux
+        return audio_linux.dispositivi("microfono" if sorgente == "microfono" else "pc")
     if sorgente == "chiamata":           # qui si sceglie dove SENTIRE la chiamata
         from chiamata import cuffie
         return cuffie()
@@ -220,6 +231,9 @@ def _apri(sorgente: str, hint: str, callback):
     callback(blocco int16 [campioni, canali], frequenza) l'audio che arriva. Restituisce (stream, nome).
     Ogni errore diventa un RuntimeError con un messaggio da mostrare così com'è nel log.
     """
+    if sys.platform.startswith("linux"):
+        import audio_linux
+        return audio_linux._apri(sorgente, hint, callback)
     import numpy as np
     import pyaudiowpatch as pa
     cosa = "il microfono" if sorgente == "microfono" else "l'audio del PC da"

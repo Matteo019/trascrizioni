@@ -15,6 +15,8 @@ import time
 import socket
 import datetime
 import threading
+import shutil
+import signal
 import subprocess
 import webbrowser
 from urllib.parse import quote
@@ -85,7 +87,8 @@ class Processo:
             [str(python if python.exists() else sys.executable), "-u", str(SCRIPT[self.tipo]),
              "--progetto", self.slug],
             cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            start_new_session=os.name != "nt")      # Linux: gruppo proprio, così "Chiudi subito" chiude tutto l'albero
         log.close()
         self.pid = self.popen.pid
         scrivi_pid(self.pid_file, self.pid)
@@ -113,8 +116,12 @@ class Processo:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.pid)],
                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            elif self.popen is not None:
-                self.popen.kill()
+            else:
+                try:
+                    os.killpg(self.pid, signal.SIGKILL)
+                except OSError:
+                    if self.popen is not None:
+                        self.popen.kill()
             self.ucciso = True
         else:
             # chiusura ordinata: lo script finisce il pezzo in corso (il riassunto elabora l'ultimo testo)
@@ -342,6 +349,9 @@ def api_apri_cartella(slug: str):
     # explorer.exe porta la finestra in primo piano (os.startfile da pythonw la apre dietro al browser)
     if os.name == "nt":
         subprocess.Popen(["explorer.exe", str(base.resolve())])
+    elif shutil.which("xdg-open"):
+        subprocess.Popen(["xdg-open", str(base.resolve())], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return {"ok": True}
 
 

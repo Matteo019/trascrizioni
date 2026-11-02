@@ -755,13 +755,13 @@ async function opzioniDispositivo(sorgente, scelto = "") {
   const d = await api(`/api/dispositivi/${sorgente}`).catch(e => ({ nomi: [], predefinito: "", errore: e.message }));
   let opzioni, nota = "";
   if (sorgente === "microfono") {
-    opzioni = [["", `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
+    opzioni = [["", `Quello di sistema${d.predefinito ? ` (${d.predefinito})` : ""}`], ...d.nomi.map(n => [n, n])];
   } else {
     const cavo = /cable/i.test(d.predefinito);
-    opzioni = [["", cavo ? "Automatico: le cuffie collegate" : `Quello di Windows${d.predefinito ? ` (${d.predefinito})` : ""}`],
+    opzioni = [["", cavo ? "Automatico: le cuffie collegate" : `Quello di sistema${d.predefinito ? ` (${d.predefinito})` : ""}`],
       ...d.nomi.filter(n => !/cable/i.test(n)).map(n => [n, n]),
       ["__muto", "Non lo ascolto (solo registrazione)"]];
-    nota = cavo ? "L'uscita di Windows è il cavo virtuale: l'audio passa da lì e lo senti dove scegli qui." : "";
+    nota = cavo ? "L’uscita del sistema è il cavo virtuale: l'audio passa da lì e lo senti dove scegli qui." : "";
   }
   if (scelto && !/cable/i.test(scelto) && !opzioni.some(([v]) => v === scelto)) opzioni.push([scelto, `${scelto} (non collegato)`]);
   return { opzioni, errore: d.errore, nota };
